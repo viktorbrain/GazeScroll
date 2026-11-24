@@ -96,12 +96,17 @@ class BlinkDetector:
 
     A fixed EAR threshold (e.g. 0.18) marks almost every frame as a blink for
     people with a narrow palpebral fissure. Here the baseline is the running
-    upper-median of that person's EAR, and a blink is a drop below `ratio` of it.
+    upper-median of that person's EAR, and a blink is a SHORT drop below `ratio`
+    of it: a low EAR that lasts longer than `max_blink` seconds is a downward
+    look (the lids follow the gaze), not a blink, and is accepted.
     """
 
-    def __init__(self, ratio: float = 0.6, window: int = 150, warmup: int = 15):
-        self.ratio, self.window, self.warmup = ratio, window, warmup
+    def __init__(self, ratio: float = 0.55, window: int = 150, warmup: int = 15,
+                 max_blink: float = 0.4):
+        self.ratio, self.window, self.warmup, self.max_blink = ratio, window, warmup, max_blink
         self.buf: list[float] = []
+        self.low_since: float | None = None
+        self._n = 0
 
     @property
     def baseline(self) -> float | None:
@@ -109,12 +114,21 @@ class BlinkDetector:
             return None
         return float(np.percentile(self.buf, 70))
 
-    def __call__(self, features: np.ndarray) -> bool:
+    def __call__(self, features: np.ndarray, t: float | None = None) -> bool:
+        if t is None:                       # assume 30 fps when no clock is given
+            self._n += 1
+            t = self._n / 30
         ear = float((features[4] + features[5]) / 2)
         base = self.baseline
-        blink = base is not None and ear < self.ratio * base
-        if not blink:                       # blinks must not drag the baseline down
-            self.buf.append(ear)
-            if len(self.buf) > self.window:
-                self.buf.pop(0)
-        return blink
+        low = base is not None and ear < self.ratio * base
+        if low:
+            if self.low_since is None:
+                self.low_since = t
+            if t - self.low_since <= self.max_blink:
+                return True
+        else:
+            self.low_since = None
+        self.buf.append(ear)
+        if len(self.buf) > self.window:
+            self.buf.pop(0)
+        return False

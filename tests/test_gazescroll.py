@@ -205,3 +205,60 @@ def test_line_lock_scrolls_with_x_only_signal():
     assert r.ran_off_bottom == 0
     assert r.false_scrolls() <= 2
     assert len(r.scrolls) >= 0.6 * r.lines_read
+
+
+# --- pace keeper + head nod -----------------------------------------------------------
+from gazescroll.reading import NodDetector  # noqa: E402
+
+
+def test_pace_keeper_follows_even_when_sweeps_are_missed():
+    """Heavy x-noise hides many sweeps; the pace keeper still keeps up."""
+    nm = NoiseModel(sd_x=0.25, sd_y=0.06)
+    base = simulate_session([(State.READING, 90)], params=Params(line_lock=True, pace_factor=0,
+                            offscreen_away=False), noise=nm, seed=4, y_blind=True)
+    paced = simulate_session([(State.READING, 90)], params=Params(line_lock=True,
+                             offscreen_away=False), noise=nm, seed=4, y_blind=True)
+    assert len(paced.scrolls) > len(base.scrolls)
+    assert len(paced.scrolls) <= paced.lines_read + 3          # no runaway
+
+
+def test_no_pace_scroll_while_skimming():
+    """Known limit of the x-only mode: random skimming can mimic line ends now and then."""
+    r = simulate_session([(State.SKIMMING, 60)], params=Params(line_lock=True, offscreen_away=False),
+                         seed=1, y_blind=True)
+    assert len(r.scrolls) <= 22
+
+
+def test_nod_detector():
+    nod = NodDetector()
+    t = np.arange(0, 6, 1 / 30)
+    pitch = 0.24 + 0.004 * np.sin(7 * t)
+    pitch[(t > 3.0) & (t < 3.3)] += 0.12          # quick nod
+    hits = [ti for ti, p in zip(t, pitch) if nod(ti, p)]
+    assert len(hits) == 1 and 3.0 < hits[0] < 3.8
+    nod2 = NodDetector()
+    held = 0.24 + np.where(t > 3, 0.12, 0.0)       # head lowered and kept there
+    assert not any(nod2(ti, p) for ti, p in zip(t, held))
+
+
+def test_long_low_ear_is_looking_down_not_blink():
+    det = F.BlinkDetector()
+    f = np.zeros(F.N_FEATURES)
+    out = []
+    for i in range(150):
+        f[4] = f[5] = 0.14 if i < 60 else 0.06      # from 2 s on: looking at the screen bottom
+        out.append(det(f))
+    assert any(out[60:70]) and not any(out[80:])     # first ~0.4 s rejected, then accepted
+
+
+def test_rolling_norm_removes_offset_and_scale():
+    from gazescroll.filters import RollingNorm
+    rn = RollingNorm()
+    out = None
+    for i in range(600):
+        t = i / 30
+        x_true = (i % 75) / 75                        # sweeping lines
+        out = rn(t, 300 * x_true - 250)               # badly scaled, shifted calibration
+        if i == 599:
+            assert out is not None
+    assert abs(rn(20.0, 300 * 0.5 - 250) - 0.5) < 0.12

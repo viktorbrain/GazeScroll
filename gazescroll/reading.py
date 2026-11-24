@@ -49,6 +49,14 @@ class Params:
     # gaze y. Needs only the horizontal signal, so it works with a poor or
     # x-only calibration: the line being read stays at a constant height.
     line_lock: bool = False
+    # pace: in line_lock mode, if reading continues but no scroll came for
+    # pace_factor * line_time seconds (missed sweeps), scroll one line anyway.
+    pace_factor: float = 1.3
+    line_time: float = 2.5
+    # in x-only mode a gaze far left/right is calibration drift, not "looked away"
+    offscreen_away: bool = True
+    lock_peak_min_x: float = 0.65    # x-only: sweep must start near the line end ...
+    lock_end_x: float = 0.35         # ... and land near the line start
 
 
 @dataclass
@@ -70,6 +78,8 @@ class ReadingDetector:
         self.last_scroll_t = -1e9
         self.manual_until = -1e9
         self.dwell_start: float | None = None
+        self.reading_since = 1e9
+        self.sweep_times: list[float] = []
         self.events: list[Event] = []
 
     # -- public API ------------------------------------------------------------
@@ -91,6 +101,9 @@ class ReadingDetector:
             sweep = self._detect_sweep(t)
             if sweep is not None:
                 self.last_sweep_t = t
+                self.sweep_times.append(t)
+                if len(self.sweep_times) > 20:
+                    self.sweep_times.pop(0)
                 out.append(Event(t, "sweep", sweep))
                 new_state = self._classify(t, gaze)
                 if (new_state == State.READING and t >= self.manual_until
@@ -98,6 +111,14 @@ class ReadingDetector:
                     out.append(Event(t, "scroll_line", 1))
                     self.last_scroll_t = t
                     self.hist.clear()   # content moved: old samples are stale
+
+        # pace keeper (line_lock): missed sweeps must not leave the reader behind
+        if (p.line_lock and p.pace_factor > 0 and gaze is not None
+                and new_state == State.READING and t >= self.manual_until
+                and t - self.last_scroll_t > p.pace_factor * p.line_time
+                and t - self.reading_since > p.line_time):
+            out.append(Event(t, "scroll_line", 1))
+            self.last_scroll_t = t
 
         # dwell at the very bottom -> half page
         if (gaze is not None and not p.line_lock and new_state == State.READING
@@ -113,6 +134,8 @@ class ReadingDetector:
             self.dwell_start = None
 
         if new_state != self.state:
+            if new_state == State.READING:
+                self.reading_since = t
             self.state = new_state
             out.append(Event(t, "state", new_state))
         self.events.extend(out)
@@ -150,6 +173,8 @@ class ReadingDetector:
         drop = xs[i_max] - x_now
         if drop < p.sweep_min_dx or x_now > p.sweep_end_x:
             return None
+        if p.line_lock and (xs[i_max] < p.lock_peak_min_x or x_now > p.lock_end_x):
+            return None
         if y_now - recent[i_max][2] < -p.sweep_max_up * p.line_h * 3:  # generous for noise
             return None
         # prelude: rightward progress before the peak
@@ -165,13 +190,22 @@ class ReadingDetector:
             return None
         return (x_now, y_now)
 
+    def _rhythmic(self, t: float) -> bool:
+        """Two consecutive return sweeps about one line-time apart, the last one recent."""
+        lt = self.p.line_time
+        s = [x for x in self.sweep_times if t - x <= 2.6 * lt]
+        if len(s) < 2 or t - s[-1] > 1.6 * lt:
+            return False
+        gaps = np.diff(s)
+        return bool(np.any((gaps >= 0.5 * lt) & (gaps <= 1.8 * lt)))
+
     def _classify(self, t: float, gaze) -> State:
         p = self.p
         if gaze is None:
             return State.AWAY if t - self.last_face_t >= p.away_after else self.state
         x, y = gaze
         m = p.offscreen_margin
-        if not (-m <= x <= 1 + m and -m <= y <= 1 + m):
+        if p.offscreen_away and not (-m <= x <= 1 + m and -m <= y <= 1 + m):
             return State.AWAY
         fr = self.forward_ratio(t)
         if fr is None:                      # e.g. right after a scroll cleared the history
@@ -180,6 +214,46 @@ class ReadingDetector:
         # hysteresis: harder to enter READING than to stay in it
         enter = p.reading_fwd_ratio - (0.05 if recent_sweep else 0.0)
         stay = p.reading_stay_ratio
+        if p.line_lock:
+            # no vertical signal: demand the reading rhythm (a recent return sweep)
+            # and a clearly rightward drift, otherwise skimming looks like reading
+            if not self._rhythmic(t):
+                return State.SKIMMING
+            enter, stay = enter + 0.1, stay + 0.1
         if fr >= (stay if self.state == State.READING else enter):
             return State.READING
         return State.SKIMMING
+
+
+class NodDetector:
+    """Deliberate head nod -> discrete command (e.g. scroll a third of a page).
+
+    Uses the head-pitch feature. A nod = deviation from the 2 s running median
+    larger than `amp` that returns below amp/3 within `max_dur` seconds.
+    Natural reading movement in a real log stayed below ~0.07.
+    """
+
+    def __init__(self, amp: float = 0.08, max_dur: float = 0.8, refractory: float = 1.5):
+        self.amp, self.max_dur, self.refractory = amp, max_dur, refractory
+        self.hist: deque = deque()
+        self.peak_t: float | None = None
+        self.last_nod = -1e9
+
+    def __call__(self, t: float, pitch: float) -> bool:
+        self.hist.append((t, pitch))
+        while self.hist and t - self.hist[0][0] > 2.0:
+            self.hist.popleft()
+        base = float(np.median([p for _, p in self.hist]))
+        dev = abs(pitch - base)
+        if self.peak_t is None:
+            if dev > self.amp and t - self.last_nod > self.refractory and len(self.hist) > 10:
+                self.peak_t = t
+                self.base0 = float(np.median([p for tt, p in self.hist if tt < t - 0.3] or [base]))
+            return False
+        if abs(pitch - self.base0) < self.amp / 3:
+            self.peak_t = None
+            self.last_nod = t
+            return True
+        if t - self.peak_t > self.max_dur:      # held, not a nod
+            self.peak_t = None
+        return False

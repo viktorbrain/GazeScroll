@@ -47,6 +47,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
   <span id="badge" data-s="-">–</span>
   <button id="bDot" aria-pressed="false">Tekintetpont</button>
   <button id="bAuto" aria-pressed="true">Auto-görgetés: be</button>
+  <button id="bNod" aria-pressed="true">Biccentés: be</button>
   <button id="bRecal">Újrakalibrálás</button>
   <button id="bLog">Napló mentése</button>
   <button id="bReset">Tanult profil törlése</button>
@@ -69,6 +70,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
   <div class="row">
     <button class="pri" id="bStart">Kamera + kalibráció</button>
     <button id="bX">Egyszerű mód: csak vízszintes (3 pont)</button>
+    <button id="bForce">Indítás kalibráció nélkül</button>
     <button id="bDemo">Demó kamera nélkül (érintés = tekintet)</button>
   </div>
   <p id="msg"></p>
@@ -146,9 +148,12 @@ function OneEuro(minC=1,beta=.5,dC=1){ let xp=null,dp=null,tp=null;
     xp=xh;dp=dh;tp=t;return xh; }; }
 
 /* ---------------- reading detector (port of gazescroll/reading.py) ---------------- */
-const P={lineLock:false,sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
+const P={lineLock:false,paceFactor:1.3,lineTime:2.5,offscreenAway:true,lockPeak:.65,lockEnd:.35,sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
   enter:.50,stay:.30,sweepMem:4,awayAfter:.5,margin:.15,scrollZone:.65,dwellZone:.85,dwellTime:1.5,mute:.4,manual:3};
-const det={hist:[],state:'FELRENEZ',lastFace:-1e9,lastSweep:-1e9,lastScroll:-1e9,manualUntil:-1e9,dwell:null,lineH:.04,
+const det={sweepTimes:[],readingSince:1e9,
+  rhythmic(t){ const lt=P.lineTime, s=this.sweepTimes.filter(x=>t-x<=2.6*lt); if(s.length<2||t-s.at(-1)>1.6*lt) return false;
+    for(let i=1;i<s.length;i++){ const g=s[i]-s[i-1]; if(g>=.5*lt&&g<=1.8*lt) return true; } return false; },
+  hist:[],state:'FELRENEZ',lastFace:-1e9,lastSweep:-1e9,lastScroll:-1e9,manualUntil:-1e9,dwell:null,lineH:.04,
   resampled(t,span){ const pts=this.hist.filter(h=>t-h[0]<=span); if(pts.length<2) return [];
     const out=[]; let j=0; for(let g=pts[0][0]; g<=pts.at(-1)[0]+1e-9; g+=P.step){
       while(j<pts.length-2&&pts[j+1][0]<g) j++; const a=pts[j],b=pts[j+1]||a, f=b[0]>a[0]?(g-a[0])/(b[0]-a[0]):0;
@@ -160,21 +165,27 @@ const det={hist:[],state:'FELRENEZ',lastFace:-1e9,lastSweep:-1e9,lastScroll:-1e9
   sweep(t){ if(t-this.lastSweep<P.refractory) return null; const rec=this.hist.filter(h=>t-h[0]<=P.sweepWin); if(rec.length<2) return null;
     let im=0; rec.forEach((h,i)=>{ if(h[1]>rec[im][1]) im=i; }); const now=rec.at(-1);
     if(rec[im][1]-now[1]<P.sweepMinDx||now[1]>P.sweepEndX) return null;
+    if(P.lineLock&&(rec[im][1]<P.lockPeak||now[1]>P.lockEnd)) return null;
     if(now[2]-rec[im][2]< -1.5*this.lineH) return null;
     const tp=rec[im][0], early=this.hist.filter(h=>h[0]>=tp-P.prelude-.3&&h[0]<=tp-P.prelude*.6).map(h=>h[1]).sort((a,b)=>a-b);
     if(!early.length||rec[im][1]-early[early.length>>1]<.12) return null; return [now[1],now[2]]; },
   classify(t,g){ if(!g) return t-this.lastFace>=P.awayAfter?'FELRENEZ':this.state;
-    const m=P.margin; if(g[0]<-m||g[0]>1+m||g[1]<-m||g[1]>1+m) return 'FELRENEZ';
+    const m=P.margin; if(P.offscreenAway&&(g[0]<-m||g[0]>1+m||g[1]<-m||g[1]>1+m)) return 'FELRENEZ';
     const fr=this.fwd(t); if(fr===null) return this.state==='FELRENEZ'?'PASZTAZ':this.state;
-    const enter=P.enter-(t-this.lastSweep<=P.sweepMem?.05:0);
-    return fr>=(this.state==='OLVAS'?P.stay:enter)?'OLVAS':'PASZTAZ'; },
+    let enter=P.enter-(t-this.lastSweep<=P.sweepMem?.05:0), stay=P.stay;
+    if(P.lineLock){ if(!this.rhythmic(t)) return 'PASZTAZ'; enter+=.1; stay+=.1; }
+    return fr>=(this.state==='OLVAS'?stay:enter)?'OLVAS':'PASZTAZ'; },
   push(t,g){ const ev=[]; if(g){this.lastFace=t;this.hist.push([t,g[0],g[1]]);}
     while(this.hist.length&&t-this.hist[0][0]>3.6) this.hist.shift();
     let s=this.classify(t,g);
-    if(g&&t-this.lastScroll>P.mute){ const sw=this.sweep(t); if(sw){ this.lastSweep=t; ev.push(['sweep',sw]); s=this.classify(t,g);
+    if(g&&t-this.lastScroll>P.mute){ const sw=this.sweep(t); if(sw){ this.lastSweep=t; this.sweepTimes.push(t); if(this.sweepTimes.length>20) this.sweepTimes.shift(); ev.push(['sweep',sw]); s=this.classify(t,g);
       if(s==='OLVAS'&&(P.lineLock||sw[1]>=P.scrollZone)&&t>=this.manualUntil){ ev.push(['line']); this.lastScroll=t; this.hist=[]; } } }
+    // pace keeper (x-only): missed sweeps must not leave the reader behind
+    if(P.lineLock&&P.paceFactor>0&&g&&s==='OLVAS'&&t>=this.manualUntil&&t-this.lastScroll>P.paceFactor*P.lineTime&&t-this.readingSince>P.lineTime){
+      ev.push(['line']); this.lastScroll=t; }
     if(g&&!P.lineLock&&s==='OLVAS'&&g[1]>=P.dwellZone){ if(this.dwell===null) this.dwell=t; else if(t-this.dwell>=P.dwellTime&&t>=this.manualUntil){ ev.push(['half']); this.lastScroll=t; this.dwell=null; this.hist=[]; } }
     else this.dwell=null;
+    if(s!==this.state&&s==='OLVAS') this.readingSince=t;
     this.state=s; return ev; } };
 
 /* ---------------- learning from manual corrections (port of gazescroll/adapt.py) ---------------- */
@@ -184,14 +195,14 @@ const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){retu
 const DEFAULTS=Object.fromEntries(Object.keys(BOUNDS).map(k=>[k,P[k]]));
 const adapt={lastAuto:-1e9,lastSweep:null,lineTime:null,nEarly:0,nLate:0,
   load(){ const pr=store.get('gs-profile'); if(!pr) return; for(const k in BOUNDS) if(typeof pr[k]==='number') P[k]=clamp(k,pr[k]);
-    this.lineTime=pr.lineTime??null; this.nEarly=pr.nEarly||0; this.nLate=pr.nLate||0; },
+    this.lineTime=pr.lineTime??null; if(this.lineTime) P.lineTime=this.lineTime; this.nEarly=pr.nEarly||0; this.nLate=pr.nLate||0; },
   save(){ store.set('gs-profile',this.profile()); },
   profile(){ const o={}; for(const k in BOUNDS) o[k]=+P[k].toFixed(3); return Object.assign(o,{lineTime:this.lineTime&&+this.lineTime.toFixed(2),nEarly:this.nEarly,nLate:this.nLate}); },
   reset(){ Object.assign(P,DEFAULTS); this.lineTime=null; this.nEarly=this.nLate=0; store.del('gs-profile'); },
   onAuto(t){ this.lastAuto=t; },
   onSweep(t){ if(this.lastSweep!==null){ const dt=t-this.lastSweep; if(dt>=.8&&dt<=12){
       this.lineTime=this.lineTime===null?dt:.85*this.lineTime+.15*dt;
-      P.dwellTime=clamp('dwellTime',.8*this.lineTime); P.refractory=clamp('refractory',.3*this.lineTime); } }
+      P.dwellTime=clamp('dwellTime',.8*this.lineTime); P.refractory=clamp('refractory',.3*this.lineTime); P.lineTime=this.lineTime; } }
     this.lastSweep=t; },
   onManual(t,dir,reading){
     if(dir<0&&t-this.lastAuto<=3){ this.nEarly++; P.scrollZone=clamp('scrollZone',P.scrollZone+.03); P.sweepMinDx=clamp('sweepMinDx',P.sweepMinDx+.02); this.save(); return 'early'; }
@@ -199,14 +210,28 @@ const adapt={lastAuto:-1e9,lastSweep:null,lineTime:null,nEarly:0,nLate:0,
     return null; } };
 adapt.load();
 
+/* ---------------- head nod = scroll a third of the screen (port of NodDetector) ---------------- */
+const nod={amp:.08,maxDur:.8,refr:1.5,hist:[],peak:null,base0:0,last:-1e9,
+  test(t,p){ this.hist.push([t,p]); while(this.hist.length&&t-this.hist[0][0]>2) this.hist.shift();
+    const med=a=>{const b=a.slice().sort((x,y)=>x-y);return b[b.length>>1];};
+    const base=med(this.hist.map(h=>h[1])), dev=Math.abs(p-base);
+    if(this.peak===null){ if(dev>this.amp&&t-this.last>this.refr&&this.hist.length>10){ this.peak=t; const old=this.hist.filter(h=>h[0]<t-.3).map(h=>h[1]); this.base0=old.length?med(old):base; } return false; }
+    if(Math.abs(p-this.base0)<this.amp/3){ this.peak=null; this.last=t; return true; }
+    if(t-this.peak>this.maxDur) this.peak=null; return false; } };
+let nodOn=store?.get?.('gs-nod')??true;
+
 /* ---------------- UI state ---------------- */
 const reader=$('reader'), art=$('art'), dot=$('dot'), tgt=$('target');
 let showDot=false, auto=true, mode='idle', landmarker=null, video=$('cam'), lastVideoT=-1;
 // blink relative to the person's own eye opening (a fixed EAR < 0.18 rejects narrow eyes)
-const blink={buf:[],test(f){ const ear=(f[4]+f[5])/2; let b=null;
+// a blink is a SHORT drop; a low EAR lasting > 0.4 s is looking down (lids follow the gaze) and is kept
+const blink={buf:[],lowSince:null,test(f){ const t=performance.now()/1000, ear=(f[4]+f[5])/2; let b=null;
   if(this.buf.length>=15){ const a=this.buf.slice().sort((p,q)=>p-q); b=a[Math.floor(a.length*.7)]; }
-  const isB=b!==null&&ear<.6*b; if(!isB){ this.buf.push(ear); if(this.buf.length>150) this.buf.shift(); } quality.ear=ear; quality.earBase=b||0; return isB; }};
-const quality={ear:0,earBase:0,irisPx:0,facePx:0,lum:0,n:0}, qcv=document.createElement('canvas'); qcv.width=32; qcv.height=24; const qctx=qcv.getContext('2d',{willReadFrequently:true});
+  quality.ear=ear; quality.earBase=b||0;
+  if(b!==null&&ear<.55*b){ if(this.lowSince===null) this.lowSince=t; if(t-this.lowSince<=.4){ quality.blinks++; return true; } }
+  else this.lowSince=null;
+  this.buf.push(ear); if(this.buf.length>150) this.buf.shift(); return false; }};
+const quality={blinks:0,ear:0,earBase:0,irisPx:0,facePx:0,lum:0,n:0}, qcv=document.createElement('canvas'); qcv.width=32; qcv.height=24; const qctx=qcv.getContext('2d',{willReadFrequently:true});
 let filt=OneEuro(), log=[], nScroll=0, nSweep=0, lastFrameT=0, fps=0;
 const lineHpx=()=>parseFloat(getComputedStyle(art).lineHeight)||31;
 const col=()=>{ const r=art.getBoundingClientRect(); return {l:r.left+20,w:r.width-40}; };
@@ -216,6 +241,8 @@ $('bAuto').onclick=e=>{ auto=!auto; e.target.setAttribute('aria-pressed',auto); 
 $('bRecal').onclick=()=>{ if(mode!=='demo'){ $('overlay').classList.remove('hide'); msg(''); mode='idle'; } };
 $('bLog').onclick=()=>{ const blob=new Blob([JSON.stringify({meta:{ua:navigator.userAgent,w:innerWidth,h:innerHeight,lineH:lineHpx(),col:col(),video:[video.videoWidth,video.videoHeight],requestedRes:res,profile:adapt.profile(),model:{mu:model.mu,sd:model.sd,W:model.W}},frames:log})],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='gazescroll-log-'+Date.now()+'.json'; a.click(); };
+const setNod=v=>{ nodOn=v; store.set('gs-nod',v); $('bNod').setAttribute('aria-pressed',v); $('bNod').textContent='Biccentés: '+(v?'be':'ki'); };
+setNod(nodOn); $('bNod').onclick=()=>setNod(!nodOn);
 $('bReset').onclick=()=>{ adapt.reset(); toast('A tanult profil törölve, alapértékek visszaállítva.'); };
 let res=store.get('gs-res')||640;
 const setRes=r=>{ res=r; store.set('gs-res',r); $('r640').setAttribute('aria-pressed',r===640); $('r1280').setAttribute('aria-pressed',r===1280); };
@@ -278,17 +305,23 @@ function grabFeatures(){
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // collects features while the user looks at (x,y); extends the time when the eye is hard to see
 async function collect(x,y,ms,maxMs=2600){ tgt.style.left=x+'px'; tgt.style.top=y+'px'; tgt.style.display='block'; $('eyeq').style.display='block';
-  const t0=performance.now(), S=[]; let frames=0, seen=0;
+  const t0=performance.now(), S=[]; let frames=0, seen=0, face=0;
   while(true){ const el=performance.now()-t0; if(el>=maxMs||(el>=ms&&S.length>=6)) break;
-    const f=grabFeatures(); if(f!==undefined){ frames++; if(Array.isArray(f)){ seen++; if(el>300) S.push(f); } }
-    if(frames) $('eyeq').textContent=`szem látható: ${Math.round(100*seen/frames)}%`;
+    const f=grabFeatures(); if(f!==undefined){ frames++; if(f!==null) face++; if(Array.isArray(f)){ seen++; if(el>300) S.push(f); } }
+    if(frames) $('eyeq').textContent=`arc ${Math.round(100*face/frames)}% · szem ${Math.round(100*seen/frames)}% · minta ${S.length}`;
     await sleep(15); }
   tgt.style.display='none'; $('eyeq').style.display='none'; await sleep(150);
-  calStats.frames+=frames; calStats.seen+=seen;
+  calStats.frames+=frames; calStats.seen+=seen; calStats.face+=face;
+  calStats.points.push({x:Math.round(x),y:Math.round(y),frames,face,seen,samples:S.length});
   if(S.length<2) return null;
   const med=j=>{const a=S.map(s=>s[j]).sort((p,q)=>p-q);return a[a.length>>1];};
   return S[0].map((_,j)=>med(j)); }
-const calStats={frames:0,seen:0};
+const calStats={frames:0,seen:0,face:0,points:[]};
+const resetCal=()=>{ calStats.frames=calStats.seen=calStats.face=0; calStats.points=[]; };
+const calReport=()=>{ const ok=calStats.points.filter(p=>p.samples>=2).length, n=calStats.points.length,
+  top=calStats.points.filter(p=>p.y<innerHeight*.3), bot=calStats.points.filter(p=>p.y>innerHeight*.7),
+  r=a=>a.length?Math.round(100*a.reduce((s,p)=>s+p.seen,0)/Math.max(1,a.reduce((s,p)=>s+p.frames,0))):0;
+  return {ok,n,vis:calStats.frames?Math.round(100*calStats.seen/calStats.frames):0,face:calStats.frames?Math.round(100*calStats.face/calStats.frames):0,top:r(top),bottom:r(bot)}; };
 let xOnly=false;
 // x-only model: x = a + b*iris_u(avg) + c*yaw  (3 parameters, robust with few points)
 const xm={w:null, row:f=>[1,(f[0]+f[2])/2,f[6]],
@@ -296,16 +329,25 @@ const xm={w:null, row:f=>[1,(f[0]+f[2])/2,f[6]],
     const b=[0,1,2].map(i=>[R.reduce((s,r,k)=>s+r[i]*Y[k],0)]); this.w=solve(A,b).map(r=>r[0]); },
   predict(f){ const r=this.row(f); return r.reduce((s,v,i)=>s+v*this.w[i],0); } };
 
+// self-calibrating x for the x-only mode (port of filters.RollingNorm)
+const rn={buf:[],win:12,reset(){this.buf=[];},
+  norm(t,x){ this.buf.push([t,x]); while(this.buf.length&&t-this.buf[0][0]>this.win) this.buf.shift();
+    if(this.buf.length<30) return null; const a=this.buf.map(b=>b[1]).sort((p,q)=>p-q);
+    const lo=a[Math.floor(a.length*.1)], hi=a[Math.floor(a.length*.9)]; return .1+.8*(x-lo)/Math.max(hi-lo,1e-6); } };
+// default x model when there is no calibration: sign/ratio taken from a real log (x falls with iris u and yaw)
+const XM_DEFAULT=[0,-1,-.62];
+
 function finishRun(text){ $('bar').style.display='flex'; mode='run'; filt=OneEuro(); $('stats').textContent='';
-  P.lineLock=xOnly; alertBox(text); }
+  P.lineLock=xOnly; P.offscreenAway=!xOnly; rn.reset(); alertBox(text); }
 
 async function startXOnly(){
   mode='cal'; xOnly=true; $('overlay').classList.add('hide'); $('bar').style.display='none';
-  calStats.frames=calStats.seen=0;
+  resetCal();
   const y=innerHeight*.45, xs=[.12,.5,.88].map(a=>a*innerWidth), X=[],Y=[];
   for(let pass=0;pass<2;pass++) for(const x of xs){ const f=await collect(x,y,1500,3500); if(f){X.push(f);Y.push(x);} }
-  const vis=calStats.frames?Math.round(100*calStats.seen/calStats.frames):0;
-  if(X.length<3||new Set(Y.filter((_,i)=>X[i])).size<2){ $('overlay').classList.remove('hide'); msg(`A szem csak a képkockák ${vis}%-án látszott. Több fény szemből, telefon kicsit feljebb, szemmagasság felé.`); mode='idle'; return; }
+  const rep_=calReport(), vis=rep_.vis;
+  log.push({t:+(performance.now()/1000).toFixed(3),calibration:{mode:'x-only',...rep_,points:calStats.points}});
+  if(X.length<3||new Set(Y).size<2){ $('overlay').classList.remove('hide'); msg(`Sikertelen: ${rep_.ok}/${rep_.n} pont adott elég mintát (arc ${rep_.face}%, szem ${rep_.vis}%). Több fény szemből, telefon kicsit feljebb.`); mode='idle'; return; }
   xm.fit(X,Y); model.W=null;
   const err=X.reduce((s,f,i)=>s+Math.abs(xm.predict(f)-Y[i]),0)/X.length;
   log.push({t:+(performance.now()/1000).toFixed(3),validation:{mode:'x-only',ex:err,n:X.length,visible:vis,video:[video.videoWidth,video.videoHeight]}});
@@ -314,17 +356,18 @@ async function startXOnly(){
 
 async function startCalibration(){
   mode='cal'; xOnly=false; $('overlay').classList.add('hide'); $('bar').style.display='none';
-  calStats.frames=calStats.seen=0;
+  resetCal();
   const X=[],Y=[], mx=.1*innerWidth, my=.12*innerHeight;
   const pts=[]; for(const fy of [0,.5,1]) for(const fx of [0,.5,1]) pts.push([mx+fx*(innerWidth-2*mx), my+fy*(innerHeight-2*my)]);
   for(let pass=0;pass<2;pass++){ for(const p of pts.slice().sort(()=>Math.random()-.5)){ const f=await collect(p[0],p[1],1200); if(f){X.push(f);Y.push(p);} } }
-  const vis=calStats.frames?Math.round(100*calStats.seen/calStats.frames):0;
+  const rep_=calReport(), vis=rep_.vis;
+  log.push({t:+(performance.now()/1000).toFixed(3),calibration:{mode:'2d',...rep_,points:calStats.points}});
   if(X.length<6){
     if(X.length>=3){ // fall back to x-only with what we have
       xOnly=true; model.W=null; xm.fit(X,Y.map(p=>p[0]));
       log.push({t:+(performance.now()/1000).toFixed(3),validation:{mode:'x-only-fallback',n:X.length,visible:vis}});
-      finishRun(`Csak ${X.length} pontnál láttam a szemed (${vis}%), ezért egyszerű, csak vízszintes módra váltottam. Minden sor végén egy sort görget.`); return; }
-    $('overlay').classList.remove('hide'); msg(`A szem csak a képkockák ${vis}%-án látszott. Próbáld az „Egyszerű mód” gombot, több fénnyel szemből.`); mode='idle'; return; }
+      finishRun(`Csak ${X.length}/18 pont sikerült (felső sor ${rep_.top}%, alsó sor ${rep_.bottom}%), ezért egyszerű, csak vízszintes módra váltottam. Minden sor végén egy sort görget.`); return; }
+    $('overlay').classList.remove('hide'); msg(`Sikertelen: csak ${rep_.ok}/${rep_.n} pont adott elég mintát (arc ${rep_.face}%, szem ${rep_.vis}%; felső sor ${rep_.top}%, alsó sor ${rep_.bottom}%). Mentsd a naplót és küldd el, vagy próbáld az Egyszerű módot.`); mode='idle'; return; }
   model.lam=.3*Math.max(1,18/X.length);   // fewer points -> stronger regularisation
   model.fit(X,Y);
   // validation on 4 new points
@@ -351,13 +394,21 @@ function loop(){
     if(f!==undefined){ fps=.9*fps+.1/Math.max(t-lastFrameT,1e-3); lastFrameT=t;
       if(f===null) handleGaze(t,null,null);
       else if(f!=='blink'){
-        if(xOnly&&!model.W){ const g=filt(t,[xm.predict(f),innerHeight*.5]); handleGaze(t,g,f); }
-        else { let g=model.predict(f); if(xOnly) g=[g[0],innerHeight*.5]; handleGaze(t,filt(t,g),f); } } }
+        if(nodOn&&nod.test(t,f[7])){ doScroll(innerHeight/3); det.manualUntil=t+1; det.hist=[]; log.push({t:+t.toFixed(3),nod:true}); toast('Biccentés → görgetés'); }
+        if(xOnly){ const raw=model.W?model.predict(f)[0]:xm.predict(f), xn=rn.norm(t,raw);
+          if(xn===null) handleGaze(t,null,null);
+          else { const c=col(); handleGaze(t,filt(t,[c.l+xn*c.w,innerHeight*.5]),f); } }
+        else handleGaze(t,filt(t,model.predict(f)),f); } }
   }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
+$('bForce').onclick=async()=>{ try{ if(!landmarker) await initCamera();
+    xOnly=true; model.W=null; if(!xm.w) xm.w=XM_DEFAULT.slice(); $('overlay').classList.add('hide');
+    log.push({t:+(performance.now()/1000).toFixed(3),calibration:{mode:'forced',xm:xm.w}});
+    finishRun('Kényszerített indítás: kalibráció nélkül, önhangoló vízszintes móddal. Az első ~5 s-ban tanul, aztán soronként görget. Biccentés = 1/3 képernyő.'); }
+  catch(e){ msg('Nem sikerült: '+e.message+' – HTTPS kell, és engedélyezni a kamerát.'); } };
 $('bX').onclick=async()=>{ try{ if(!landmarker) await initCamera(); await startXOnly(); }
   catch(e){ msg('Nem sikerült: '+e.message+' – HTTPS kell, és engedélyezni a kamerát.'); } };
 $('bStart').onclick=async()=>{ try{ if(!landmarker) await initCamera(); await startCalibration(); }

@@ -63,6 +63,7 @@ class ScrollAdapter:
                 p = self.params
                 p.dwell_time = _clamp("dwell_time", 0.8 * self.line_time)
                 p.sweep_refractory = _clamp("sweep_refractory", 0.3 * self.line_time)
+                p.line_time = self.line_time
         self.last_sweep = t
 
     def on_manual_scroll(self, t: float, direction: int, reading: bool = True) -> str | None:

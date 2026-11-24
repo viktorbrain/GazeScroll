@@ -179,3 +179,29 @@ def test_closed_loop_corrections_die_out(start):
                                    user=UserPolicy()).manual) for s in range(6)]
     assert sum(manual[-3:]) <= 1, manual
     assert 0.45 <= ad.params.scroll_zone <= 0.80
+
+
+# --- narrow eyes / poor calibration ----------------------------------------------
+def test_blink_detector_adapts_to_narrow_eyes():
+    rng = np.random.default_rng(0)
+    det = F.BlinkDetector()
+    f = np.zeros(F.N_FEATURES)
+    flags = []
+    for i in range(200):
+        ear = 0.12 + rng.normal(0, 0.006)            # narrow eyes: always below 0.18
+        if i in (100, 101, 102):
+            ear = 0.03                                # a real blink
+        f[4] = f[5] = ear
+        flags.append(det(f))
+    assert F.is_blink(f)                              # the fixed threshold fails ...
+    assert sum(flags[20:]) <= 4 and all(flags[100:103])   # ... the adaptive one works
+
+
+def test_line_lock_scrolls_with_x_only_signal():
+    """Vertical gaze unknown: one line per return sweep keeps the text in view."""
+    p = Params(line_lock=True)
+    r = simulate_session([(State.READING, 90), (State.SKIMMING, 20)], params=p,
+                         seed=2, y_blind=True)
+    assert r.ran_off_bottom == 0
+    assert r.false_scrolls() <= 2
+    assert len(r.scrolls) >= 0.6 * r.lines_read

@@ -37,6 +37,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #target{position:fixed;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:var(--acc);z-index:30;display:none;box-shadow:0 0 0 6px color-mix(in srgb,var(--acc) 25%,transparent)}
 #target::after{content:"";position:absolute;inset:11px;border-radius:50%;background:#fff}
 #cam{position:fixed;right:8px;bottom:8px;width:96px;border-radius:8px;z-index:6;opacity:.85;transform:scaleX(-1)}
+#eyeq{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:31;display:none;padding:6px 12px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:14px;font-variant-numeric:tabular-nums}
 #msg{font-size:14px;color:var(--mute);min-height:1.5em}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 </style>
@@ -55,6 +56,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 <div id="reader"><article id="art"></article></div>
 <div id="dot"></div>
 <div id="target"></div>
+<div id="eyeq" aria-live="polite"></div>
 <video id="cam" playsinline muted></video>
 
 <div id="overlay">
@@ -66,6 +68,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
   </div>
   <div class="row">
     <button class="pri" id="bStart">Kamera + kalibráció</button>
+    <button id="bX">Egyszerű mód: csak vízszintes (3 pont)</button>
     <button id="bDemo">Demó kamera nélkül (érintés = tekintet)</button>
   </div>
   <p id="msg"></p>
@@ -143,7 +146,7 @@ function OneEuro(minC=1,beta=.5,dC=1){ let xp=null,dp=null,tp=null;
     xp=xh;dp=dh;tp=t;return xh; }; }
 
 /* ---------------- reading detector (port of gazescroll/reading.py) ---------------- */
-const P={sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
+const P={lineLock:false,sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
   enter:.50,stay:.30,sweepMem:4,awayAfter:.5,margin:.15,scrollZone:.65,dwellZone:.85,dwellTime:1.5,mute:.4,manual:3};
 const det={hist:[],state:'FELRENEZ',lastFace:-1e9,lastSweep:-1e9,lastScroll:-1e9,manualUntil:-1e9,dwell:null,lineH:.04,
   resampled(t,span){ const pts=this.hist.filter(h=>t-h[0]<=span); if(pts.length<2) return [];
@@ -169,8 +172,8 @@ const det={hist:[],state:'FELRENEZ',lastFace:-1e9,lastSweep:-1e9,lastScroll:-1e9
     while(this.hist.length&&t-this.hist[0][0]>3.6) this.hist.shift();
     let s=this.classify(t,g);
     if(g&&t-this.lastScroll>P.mute){ const sw=this.sweep(t); if(sw){ this.lastSweep=t; ev.push(['sweep',sw]); s=this.classify(t,g);
-      if(s==='OLVAS'&&sw[1]>=P.scrollZone&&t>=this.manualUntil){ ev.push(['line']); this.lastScroll=t; this.hist=[]; } } }
-    if(g&&s==='OLVAS'&&g[1]>=P.dwellZone){ if(this.dwell===null) this.dwell=t; else if(t-this.dwell>=P.dwellTime&&t>=this.manualUntil){ ev.push(['half']); this.lastScroll=t; this.dwell=null; this.hist=[]; } }
+      if(s==='OLVAS'&&(P.lineLock||sw[1]>=P.scrollZone)&&t>=this.manualUntil){ ev.push(['line']); this.lastScroll=t; this.hist=[]; } } }
+    if(g&&!P.lineLock&&s==='OLVAS'&&g[1]>=P.dwellZone){ if(this.dwell===null) this.dwell=t; else if(t-this.dwell>=P.dwellTime&&t>=this.manualUntil){ ev.push(['half']); this.lastScroll=t; this.dwell=null; this.hist=[]; } }
     else this.dwell=null;
     this.state=s; return ev; } };
 
@@ -199,14 +202,18 @@ adapt.load();
 /* ---------------- UI state ---------------- */
 const reader=$('reader'), art=$('art'), dot=$('dot'), tgt=$('target');
 let showDot=false, auto=true, mode='idle', landmarker=null, video=$('cam'), lastVideoT=-1;
-const quality={irisPx:0,facePx:0,lum:0,n:0}, qcv=document.createElement('canvas'); qcv.width=32; qcv.height=24; const qctx=qcv.getContext('2d',{willReadFrequently:true});
+// blink relative to the person's own eye opening (a fixed EAR < 0.18 rejects narrow eyes)
+const blink={buf:[],test(f){ const ear=(f[4]+f[5])/2; let b=null;
+  if(this.buf.length>=15){ const a=this.buf.slice().sort((p,q)=>p-q); b=a[Math.floor(a.length*.7)]; }
+  const isB=b!==null&&ear<.6*b; if(!isB){ this.buf.push(ear); if(this.buf.length>150) this.buf.shift(); } quality.ear=ear; quality.earBase=b||0; return isB; }};
+const quality={ear:0,earBase:0,irisPx:0,facePx:0,lum:0,n:0}, qcv=document.createElement('canvas'); qcv.width=32; qcv.height=24; const qctx=qcv.getContext('2d',{willReadFrequently:true});
 let filt=OneEuro(), log=[], nScroll=0, nSweep=0, lastFrameT=0, fps=0;
 const lineHpx=()=>parseFloat(getComputedStyle(art).lineHeight)||31;
 const col=()=>{ const r=art.getBoundingClientRect(); return {l:r.left+20,w:r.width-40}; };
 
 $('bDot').onclick=e=>{ showDot=!showDot; e.target.setAttribute('aria-pressed',showDot); dot.style.display=showDot?'block':'none'; };
 $('bAuto').onclick=e=>{ auto=!auto; e.target.setAttribute('aria-pressed',auto); e.target.textContent='Auto-görgetés: '+(auto?'be':'ki'); };
-$('bRecal').onclick=()=>{ if(mode!=='demo') startCalibration(); };
+$('bRecal').onclick=()=>{ if(mode!=='demo'){ $('overlay').classList.remove('hide'); msg(''); mode='idle'; } };
 $('bLog').onclick=()=>{ const blob=new Blob([JSON.stringify({meta:{ua:navigator.userAgent,w:innerWidth,h:innerHeight,lineH:lineHpx(),col:col(),video:[video.videoWidth,video.videoHeight],requestedRes:res,profile:adapt.profile(),model:{mu:model.mu,sd:model.sd,W:model.W}},frames:log})],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='gazescroll-log-'+Date.now()+'.json'; a.click(); };
 $('bReset').onclick=()=>{ adapt.reset(); toast('A tanult profil törölve, alapértékek visszaállítva.'); };
@@ -232,16 +239,16 @@ function handleGaze(t,gpx,feat){
   const ev=det.push(t,g);
   for(const [k,v] of ev){
     if(k==='sweep'){ nSweep++; adapt.onSweep(t);
-      if(feat&&mode==='run'){ model.update(feat,[c.l+8,NaN]); }   // line start x is known: free label
+      if(feat&&mode==='run'&&model.W&&!xOnly){ model.update(feat,[c.l+8,NaN]); }   // line start x is known: free label
     }
     if(!auto) continue;
     if(k==='line'){ doScroll(lineHpx()); adapt.onAuto(t); }
     if(k==='half'){ doScroll(innerHeight*.5); adapt.onAuto(t); }
   }
   $('badge').dataset.s=det.state; $('badge').textContent=det.state;
-  $('stats').textContent=`${fps.toFixed(0)} fps · írisz ${quality.irisPx.toFixed(0)} px · fény ${quality.lum.toFixed(0)} · sorvég ${nSweep} · görg. ${nScroll} · zóna ${P.scrollZone.toFixed(2)}${adapt.lineTime?` · sor ${adapt.lineTime.toFixed(1)} s`:''}${lastCorr?' · '+lastCorr:''}`;
+  $('stats').textContent=`${xOnly?'vízszintes mód · ':''}${fps.toFixed(0)} fps · EAR ${quality.ear.toFixed(2)} · írisz ${quality.irisPx.toFixed(0)} px · fény ${quality.lum.toFixed(0)} · sorvég ${nSweep} · görg. ${nScroll} · zóna ${P.scrollZone.toFixed(2)}${adapt.lineTime?` · sor ${adapt.lineTime.toFixed(1)} s`:''}${lastCorr?' · '+lastCorr:''}`;
   log.push({t:+t.toFixed(3),g:gpx&&gpx.map(v=>+v.toFixed(1)),f:feat&&feat.map(v=>+v.toFixed(5)),s:det.state,y:reader.scrollTop,e:ev.map(e=>e[0]),
-    q:{iris:+quality.irisPx.toFixed(1),face:+quality.facePx.toFixed(0),lum:+quality.lum.toFixed(0)}});
+    q:{ear:+quality.ear.toFixed(3),iris:+quality.irisPx.toFixed(1),face:+quality.facePx.toFixed(0),lum:+quality.lum.toFixed(0)}});
   if(log.length>30*60*20) log.shift();
 }
 
@@ -250,7 +257,7 @@ async function initCamera(){
   msg('MediaPipe betöltése…');
   const vision=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
   const files=await vision.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
-  landmarker=await vision.FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numFaces:1});
+  landmarker=await vision.FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numFaces:1,minFaceDetectionConfidence:.3,minFacePresenceConfidence:.3,minTrackingConfidence:.3});
   msg('Kamera indítása…');
   const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:res===1280?1280:640},height:{ideal:res===1280?720:480},frameRate:{ideal:30}},audio:false});
   video.srcObject=stream; await video.play();
@@ -264,32 +271,72 @@ function grabFeatures(){
   const vw=video.videoWidth, vh=video.videoHeight, px=(a,b)=>Math.hypot((lm[a].x-lm[b].x)*vw,(lm[a].y-lm[b].y)*vh);
   quality.irisPx=(px(469,471)+px(474,476))/2; quality.facePx=px(234,454);
   if(++quality.n%15===0){ try{ qctx.drawImage(video,0,0,32,24); const d=qctx.getImageData(0,0,32,24).data; let s=0; for(let i=0;i<d.length;i+=4) s+=.299*d[i]+.587*d[i+1]+.114*d[i+2]; quality.lum=s/(d.length/4); }catch(e){} }
-  const f=extract(lm); return (Math.min(f[4],f[5])<.18)?'blink':f;
+  const f=extract(lm); return blink.test(f)?'blink':f;
 }
 
 /* ---------------- calibration ---------------- */
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function collect(x,y,ms){ tgt.style.left=x+'px'; tgt.style.top=y+'px'; tgt.style.display='block';
-  const t0=performance.now(), S=[]; while(performance.now()-t0<ms){ const f=grabFeatures(); if(Array.isArray(f)&&performance.now()-t0>300) S.push(f); await sleep(15); }
-  tgt.style.display='none'; await sleep(150);
-  if(S.length<3) return null;
+// collects features while the user looks at (x,y); extends the time when the eye is hard to see
+async function collect(x,y,ms,maxMs=2600){ tgt.style.left=x+'px'; tgt.style.top=y+'px'; tgt.style.display='block'; $('eyeq').style.display='block';
+  const t0=performance.now(), S=[]; let frames=0, seen=0;
+  while(true){ const el=performance.now()-t0; if(el>=maxMs||(el>=ms&&S.length>=6)) break;
+    const f=grabFeatures(); if(f!==undefined){ frames++; if(Array.isArray(f)){ seen++; if(el>300) S.push(f); } }
+    if(frames) $('eyeq').textContent=`szem látható: ${Math.round(100*seen/frames)}%`;
+    await sleep(15); }
+  tgt.style.display='none'; $('eyeq').style.display='none'; await sleep(150);
+  calStats.frames+=frames; calStats.seen+=seen;
+  if(S.length<2) return null;
   const med=j=>{const a=S.map(s=>s[j]).sort((p,q)=>p-q);return a[a.length>>1];};
   return S[0].map((_,j)=>med(j)); }
+const calStats={frames:0,seen:0};
+let xOnly=false;
+// x-only model: x = a + b*iris_u(avg) + c*yaw  (3 parameters, robust with few points)
+const xm={w:null, row:f=>[1,(f[0]+f[2])/2,f[6]],
+  fit(X,Y){ const R=X.map(this.row), q=3, A=[0,1,2].map(i=>[0,1,2].map(j=>R.reduce((s,r)=>s+r[i]*r[j],0)+(i===j&&i>0?1e-4:0)));
+    const b=[0,1,2].map(i=>[R.reduce((s,r,k)=>s+r[i]*Y[k],0)]); this.w=solve(A,b).map(r=>r[0]); },
+  predict(f){ const r=this.row(f); return r.reduce((s,v,i)=>s+v*this.w[i],0); } };
+
+function finishRun(text){ $('bar').style.display='flex'; mode='run'; filt=OneEuro(); $('stats').textContent='';
+  P.lineLock=xOnly; alertBox(text); }
+
+async function startXOnly(){
+  mode='cal'; xOnly=true; $('overlay').classList.add('hide'); $('bar').style.display='none';
+  calStats.frames=calStats.seen=0;
+  const y=innerHeight*.45, xs=[.12,.5,.88].map(a=>a*innerWidth), X=[],Y=[];
+  for(let pass=0;pass<2;pass++) for(const x of xs){ const f=await collect(x,y,1500,3500); if(f){X.push(f);Y.push(x);} }
+  const vis=calStats.frames?Math.round(100*calStats.seen/calStats.frames):0;
+  if(X.length<3||new Set(Y.filter((_,i)=>X[i])).size<2){ $('overlay').classList.remove('hide'); msg(`A szem csak a képkockák ${vis}%-án látszott. Több fény szemből, telefon kicsit feljebb, szemmagasság felé.`); mode='idle'; return; }
+  xm.fit(X,Y); model.W=null;
+  const err=X.reduce((s,f,i)=>s+Math.abs(xm.predict(f)-Y[i]),0)/X.length;
+  log.push({t:+(performance.now()/1000).toFixed(3),validation:{mode:'x-only',ex:err,n:X.length,visible:vis,video:[video.videoWidth,video.videoHeight]}});
+  finishRun(`Egyszerű mód (szem látható: ${vis}%, vízszintes hiba ≈ ${err.toFixed(0)} px). Minden sor végén egy sort görget – húzd a szöveget oda, ahol kényelmes olvasni.`);
+}
+
 async function startCalibration(){
-  mode='cal'; $('overlay').classList.add('hide'); $('bar').style.display='none';
+  mode='cal'; xOnly=false; $('overlay').classList.add('hide'); $('bar').style.display='none';
+  calStats.frames=calStats.seen=0;
   const X=[],Y=[], mx=.1*innerWidth, my=.12*innerHeight;
   const pts=[]; for(const fy of [0,.5,1]) for(const fx of [0,.5,1]) pts.push([mx+fx*(innerWidth-2*mx), my+fy*(innerHeight-2*my)]);
   for(let pass=0;pass<2;pass++){ for(const p of pts.slice().sort(()=>Math.random()-.5)){ const f=await collect(p[0],p[1],1200); if(f){X.push(f);Y.push(p);} } }
-  if(X.length<8){ $('overlay').classList.remove('hide'); msg('Kevés jó minta – nem látom az arcod. Több fény, szemből.'); mode='idle'; return; }
+  const vis=calStats.frames?Math.round(100*calStats.seen/calStats.frames):0;
+  if(X.length<6){
+    if(X.length>=3){ // fall back to x-only with what we have
+      xOnly=true; model.W=null; xm.fit(X,Y.map(p=>p[0]));
+      log.push({t:+(performance.now()/1000).toFixed(3),validation:{mode:'x-only-fallback',n:X.length,visible:vis}});
+      finishRun(`Csak ${X.length} pontnál láttam a szemed (${vis}%), ezért egyszerű, csak vízszintes módra váltottam. Minden sor végén egy sort görget.`); return; }
+    $('overlay').classList.remove('hide'); msg(`A szem csak a képkockák ${vis}%-án látszott. Próbáld az „Egyszerű mód” gombot, több fénnyel szemből.`); mode='idle'; return; }
+  model.lam=.3*Math.max(1,18/X.length);   // fewer points -> stronger regularisation
   model.fit(X,Y);
   // validation on 4 new points
   const vp=[[.3,.25],[.7,.4],[.35,.7],[.65,.85]].map(([a,b])=>[a*innerWidth,b*innerHeight]); let ex=0,ey=0,n=0;
   for(const p of vp){ const f=await collect(p[0],p[1],1000); if(f){ const g=model.predict(f); ex+=Math.abs(g[0]-p[0]); ey+=Math.abs(g[1]-p[1]); n++; } }
+  n=Math.max(n,1);
   const cm=v=>(v/n*2.54/160).toFixed(1); // ~160 CSS px per inch on phones (approx.)
-  $('bar').style.display='flex'; mode='run'; filt=OneEuro();
-  $('stats').textContent='';
-  log.push({t:+(performance.now()/1000).toFixed(3),validation:{ex:ex/n,ey:ey/n,n,video:[video.videoWidth,video.videoHeight]}});
-  alertBox(`Validációs hiba: x ≈ ${(ex/n).toFixed(0)} px (~${cm(ex)} cm), y ≈ ${(ey/n).toFixed(0)} px (~${cm(ey)} cm). Kezdd el olvasni a szöveget.`);
+  log.push({t:+(performance.now()/1000).toFixed(3),validation:{ex:ex/n,ey:ey/n,n,points:X.length,visible:vis,video:[video.videoWidth,video.videoHeight]}});
+  const poorY=ey/n>innerHeight*.15;
+  if(poorY) xOnly=true;   // y unusable -> keep the 2-D model for x, but scroll line by line
+  finishRun(`Szem látható: ${vis}% · ${X.length}/18 pont. Hiba: x ≈ ${(ex/n).toFixed(0)} px (~${cm(ex)} cm), y ≈ ${(ey/n).toFixed(0)} px (~${cm(ey)} cm).`+
+    (poorY?' A függőleges becslés gyenge, ezért soronkénti görgetésre váltottam.':' Kezdd el olvasni a szöveget.'));
 }
 function toast(t){ alertBox(t); }
 function alertBox(text){ const d=document.createElement('div'); d.textContent=text;
@@ -303,13 +350,17 @@ function loop(){
     const f=grabFeatures();
     if(f!==undefined){ fps=.9*fps+.1/Math.max(t-lastFrameT,1e-3); lastFrameT=t;
       if(f===null) handleGaze(t,null,null);
-      else if(f!=='blink'){ const g=filt(t,model.predict(f)); handleGaze(t,g,f); } }
+      else if(f!=='blink'){
+        if(xOnly&&!model.W){ const g=filt(t,[xm.predict(f),innerHeight*.5]); handleGaze(t,g,f); }
+        else { let g=model.predict(f); if(xOnly) g=[g[0],innerHeight*.5]; handleGaze(t,filt(t,g),f); } } }
   }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
-$('bStart').onclick=async()=>{ try{ await initCamera(); await startCalibration(); }
+$('bX').onclick=async()=>{ try{ if(!landmarker) await initCamera(); await startXOnly(); }
+  catch(e){ msg('Nem sikerült: '+e.message+' – HTTPS kell, és engedélyezni a kamerát.'); } };
+$('bStart').onclick=async()=>{ try{ if(!landmarker) await initCamera(); await startCalibration(); }
   catch(e){ msg('Nem sikerült: '+e.message+' – HTTPS kell, és engedélyezni a kamerát.'); } };
 
 /* ---------------- demo: touch / mouse as gaze ---------------- */

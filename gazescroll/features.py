@@ -87,4 +87,34 @@ def extract(lm: np.ndarray, transform: np.ndarray | None = None) -> np.ndarray:
 
 
 def is_blink(features: np.ndarray, threshold: float = 0.18) -> bool:
+    """Fixed-threshold blink test. Fails for narrow eyes - prefer BlinkDetector."""
     return float(min(features[4], features[5])) < threshold
+
+
+class BlinkDetector:
+    """Blink test relative to the person's own eye opening.
+
+    A fixed EAR threshold (e.g. 0.18) marks almost every frame as a blink for
+    people with a narrow palpebral fissure. Here the baseline is the running
+    upper-median of that person's EAR, and a blink is a drop below `ratio` of it.
+    """
+
+    def __init__(self, ratio: float = 0.6, window: int = 150, warmup: int = 15):
+        self.ratio, self.window, self.warmup = ratio, window, warmup
+        self.buf: list[float] = []
+
+    @property
+    def baseline(self) -> float | None:
+        if len(self.buf) < self.warmup:
+            return None
+        return float(np.percentile(self.buf, 70))
+
+    def __call__(self, features: np.ndarray) -> bool:
+        ear = float((features[4] + features[5]) / 2)
+        base = self.baseline
+        blink = base is not None and ear < self.ratio * base
+        if not blink:                       # blinks must not drag the baseline down
+            self.buf.append(ear)
+            if len(self.buf) > self.window:
+                self.buf.pop(0)
+        return blink

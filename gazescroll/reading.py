@@ -45,6 +45,10 @@ class Params:
     dwell_time: float = 1.5          # ... for this long pages half a screen
     post_scroll_mute: float = 0.4
     manual_pause: float = 3.0
+    # line_lock: scroll one line on EVERY return sweep while reading, whatever the
+    # gaze y. Needs only the horizontal signal, so it works with a poor or
+    # x-only calibration: the line being read stays at a constant height.
+    line_lock: bool = False
 
 
 @dataclass
@@ -89,14 +93,15 @@ class ReadingDetector:
                 self.last_sweep_t = t
                 out.append(Event(t, "sweep", sweep))
                 new_state = self._classify(t, gaze)
-                if (new_state == State.READING and sweep[1] >= p.scroll_zone
-                        and t >= self.manual_until):
+                if (new_state == State.READING and t >= self.manual_until
+                        and (p.line_lock or sweep[1] >= p.scroll_zone)):
                     out.append(Event(t, "scroll_line", 1))
                     self.last_scroll_t = t
                     self.hist.clear()   # content moved: old samples are stale
 
         # dwell at the very bottom -> half page
-        if gaze is not None and new_state == State.READING and gaze[1] >= p.dwell_zone:
+        if (gaze is not None and not p.line_lock and new_state == State.READING
+                and gaze[1] >= p.dwell_zone):
             if self.dwell_start is None:
                 self.dwell_start = t
             elif t - self.dwell_start >= p.dwell_time and t >= self.manual_until:

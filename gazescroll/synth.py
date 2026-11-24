@@ -136,7 +136,8 @@ class UserPolicy:
 
 def simulate_session(segments, fs=30.0, params: Params | None = None,
                      noise: NoiseModel | None = None, seed=0, filt=True,
-                     adapter=None, user: UserPolicy | None = None) -> SessionResult:
+                     adapter=None, user: UserPolicy | None = None,
+                     y_blind: bool = False) -> SessionResult:
     """segments: list of (State, seconds). `adapter` (ScrollAdapter) learns from `user` corrections."""
     rng = np.random.default_rng(seed)
     p = adapter.params if adapter is not None else (params or Params())
@@ -208,6 +209,8 @@ def simulate_session(segments, fs=30.0, params: Params | None = None,
                     meas = truth + bias + rng.normal(0, [nm.sd_x, nm.sd_y])
                     if rng.random() < nm.outlier_p:
                         meas = meas + rng.normal(0, 0.4, 2)
+                    if y_blind:                 # vertical gaze unknown (x-only mode)
+                        meas = np.array([meas[0], 0.5])
                     gaze = tuple(f(t, meas)) if filt else tuple(meas)
                 evs = det.push(t, gaze)
                 for e in evs:

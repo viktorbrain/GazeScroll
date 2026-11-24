@@ -11,7 +11,7 @@ gazescroll/
   reading.py    olvasásdetektor (előre-arány + sorvégi visszaugrás) és görgetési logika
   adapt.py      tanuló görgetés: kézi korrekciókból és az olvasási tempóból hangolja a paramétereket
   synth.py      szintetikus szem/fej modell + zárt hurkú olvasásszimuláció
-tests/          pytest (20 teszt)
+tests/          pytest (22 teszt)
 evaluate.py     szintetikus benchmark, Markdown táblát ír ki
 replay.py       a telefonos tesztoldal naplójának visszajátszása a Python detektoron
 web/index.html  telefonos tesztoldal (MediaPipe Tasks Vision, ugyanaz a logika JS-ben)
@@ -42,3 +42,11 @@ A gombok: felbontás (640×480 / 1280×720), kalibráció (9 pont × 2 kör + 4 
 
 **Napló:** képkockánként tekintet, feature-ök, állapot, görgetési pozíció, írisz átmérője pixelben, arc szélessége, fényerő (0–255); plusz validációs hiba és a kézi korrekciók.
 A „Demó kamera nélkül” mód az érintést használja tekintetként – a detektor logikáját így kamera nélkül is ki lehet próbálni.
+
+## Keskeny szemrés / gyenge kalibráció
+
+- **Adaptív pislogásszűrés:** a pislogást a saját szemnyitottságodhoz mérjük (a megszokott érték 60%-a alatt), nem fix 0,18-as EAR-küszöbhöz. Ez utóbbi keskeny szemrésnél szinte minden képkockát eldobott.
+- **Hosszabb pontidő:** ha egy kalibrációs ponton kevés képkockán látszik a szem, a pont legfeljebb 2,6 s-ig kint marad. Lent élőben látod, hány százalékban látszik a szem.
+- **Egyszerű mód (csak vízszintes, 3 pont):** csak a bal–közép–jobb irányt tanulja meg. Minden sorvégi visszaugrásnál egy sort görget, így az éppen olvasott sor egy magasságban marad. Függőleges becslés nem kell hozzá.
+- **Automatikus visszalépés:** ha a 18 pontból 6-nál kevesebb sikerül, vagy a függőleges hiba nagy, magától erre a módra vált.
+- A MediaPipe arckeresési küszöbei 0,5-ről 0,3-ra csökkentek.

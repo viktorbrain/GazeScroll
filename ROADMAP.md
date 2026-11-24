@@ -15,6 +15,7 @@ Viktor kérései és állapotuk. Új kérés a lista végére kerül.
 | 9 | Normál kalibráció hibát ír 9x%-os láthatóság mellett | javítva: lefelé nézés ≠ pislogás; részletes kalibrációs jelentés | v4 |
 | 10 | Kényszerített indítás kalibráció nélkül | kész: „Indítás kalibráció nélkül” gomb | v4 |
 | 11 | Kamerakép jobb felülre, kisebb vagy vágott kép | kész: kis szemkivágás jobb felül; koppintás: szem / arc / elrejtés | v5 |
+| 12 | Az olvasás kapcsolója legyen ugyanolyan egyértelmű, mint a biccentésé | kész: minden kapcsoló „Név: be/ki”, bekapcsolva narancs, megjegyzi az állapotot (Olvasás-görgetés, Biccentés, Tekintetpont) | v5.1 |
 
 ## Nyitott ötletek
 

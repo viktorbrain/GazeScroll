@@ -17,7 +17,7 @@ LAYOUT: full-screen reader, thin control bar on top, calibration as full-screen 
 html,body{margin:0;height:100%}
 body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
 button{font:inherit;min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink)}
-button[aria-pressed=true]:not(#bDot):not(#bAuto){border-color:var(--acc);color:var(--acc);font-weight:600}
+button[aria-pressed=true]{border-color:var(--acc);color:var(--acc);font-weight:600}
 button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
 button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #bar{position:fixed;inset:0 0 auto 0;z-index:5;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:color-mix(in srgb,var(--bg) 92%,transparent);border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
@@ -47,8 +47,8 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 <body>
 <div id="bar">
   <span id="badge" data-s="-">–</span>
-  <button id="bDot" aria-pressed="false">Tekintetpont</button>
-  <button id="bAuto" aria-pressed="true">Auto-görgetés: be</button>
+  <button id="bDot" aria-pressed="false">Tekintetpont: ki</button>
+  <button id="bAuto" aria-pressed="true">Olvasás-görgetés: be</button>
   <button id="bNod" aria-pressed="true">Biccentés: be</button>
   <button id="bRecal">Újrakalibrálás</button>
   <button id="bLog">Napló mentése</button>
@@ -240,13 +240,16 @@ let filt=OneEuro(), log=[], nScroll=0, nSweep=0, lastFrameT=0, fps=0;
 const lineHpx=()=>parseFloat(getComputedStyle(art).lineHeight)||31;
 const col=()=>{ const r=art.getBoundingClientRect(); return {l:r.left+20,w:r.width-40}; };
 
-$('bDot').onclick=e=>{ showDot=!showDot; e.target.setAttribute('aria-pressed',showDot); dot.style.display=showDot?'block':'none'; };
-$('bAuto').onclick=e=>{ auto=!auto; e.target.setAttribute('aria-pressed',auto); e.target.textContent='Auto-görgetés: '+(auto?'be':'ki'); };
+// all on/off switches look and work the same: "Név: be/ki", orange when on, remembered
+function toggle(id,label,key,init,apply){ let v=store.get(key)??init; const b=$(id);
+  const set=x=>{ v=x; store.set(key,x); b.setAttribute('aria-pressed',x); b.textContent=`${label}: ${x?'be':'ki'}`; apply(x); };
+  set(v); b.onclick=()=>set(!v); }
+toggle('bDot','Tekintetpont','gs-dot',false,x=>{ showDot=x; dot.style.display=x&&mode!=='idle'?'block':'none'; });
+toggle('bAuto','Olvasás-görgetés','gs-auto',true,x=>{ auto=x; });
 $('bRecal').onclick=()=>{ if(mode!=='demo'){ $('overlay').classList.remove('hide'); msg(''); mode='idle'; } };
 $('bLog').onclick=()=>{ const blob=new Blob([JSON.stringify({meta:{ua:navigator.userAgent,w:innerWidth,h:innerHeight,lineH:lineHpx(),col:col(),video:[video.videoWidth,video.videoHeight],requestedRes:res,profile:adapt.profile(),model:{mu:model.mu,sd:model.sd,W:model.W}},frames:log})],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='gazescroll-log-'+Date.now()+'.json'; a.click(); };
-const setNod=v=>{ nodOn=v; store.set('gs-nod',v); $('bNod').setAttribute('aria-pressed',v); $('bNod').textContent='Biccentés: '+(v?'be':'ki'); };
-setNod(nodOn); $('bNod').onclick=()=>setNod(!nodOn);
+toggle('bNod','Biccentés','gs-nod',true,x=>{ nodOn=x; });
 $('bReset').onclick=()=>{ adapt.reset(); toast('A tanult profil törölve, alapértékek visszaállítva.'); };
 let res=store.get('gs-res')||640;
 const setRes=r=>{ res=r; store.set('gs-res',r); $('r640').setAttribute('aria-pressed',r===640); $('r1280').setAttribute('aria-pressed',r===1280); };
@@ -343,7 +346,7 @@ const rn={buf:[],win:12,reset(){this.buf=[];},
 const XM_DEFAULT=[0,-1,-.62];
 
 function finishRun(text){ $('bar').style.display='flex'; mode='run'; filt=OneEuro(); $('stats').textContent='';
-  P.lineLock=xOnly; P.offscreenAway=!xOnly; rn.reset(); alertBox(text); }
+  P.lineLock=xOnly; P.offscreenAway=!xOnly; rn.reset(); dot.style.display=showDot?'block':'none'; alertBox(text); }
 
 async function startXOnly(){
   mode='cal'; xOnly=true; $('overlay').classList.add('hide'); $('bar').style.display='none';

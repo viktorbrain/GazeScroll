@@ -21,7 +21,10 @@ def main():
     a = ap.parse_args()
 
     d = json.load(open(a.log))
-    meta, frames = d["meta"], d["frames"]
+    meta, rows = d["meta"], d["frames"]
+    frames = [r for r in rows if "g" in r]
+    labels = [r for r in rows if "label" in r]
+    valid = [r["validation"] for r in rows if "validation" in r]
     col, h = meta["col"], meta["h"]
     p = Params(line_h=meta["lineH"] / h, scroll_zone=a.scroll_zone,
                reading_fwd_ratio=a.enter, reading_stay_ratio=a.stay, sweep_min_dx=a.sweep_dx)
@@ -40,6 +43,19 @@ def main():
     print("Python replay events:", dict(ev))
     print("Logged (phone) events:", dict(logged))
     print("State share:", {k: round(v / max(len(frames), 1), 3) for k, v in states.items()})
+    if valid:
+        v = valid[-1]
+        print(f"Validation error: x {v['ex']:.0f} px, y {v['ey']:.0f} px, video {v.get('video')}")
+    q = [r["q"] for r in frames if r.get("q") and r["q"].get("iris")]
+    if q:
+        iris = sorted(x["iris"] for x in q)
+        lum = sorted(x["lum"] for x in q if x["lum"])
+        print(f"Iris diameter median {iris[len(iris)//2]:.1f} px, brightness median "
+              f"{lum[len(lum)//2] if lum else float('nan'):.0f}/255, video {meta.get('video')}")
+    if labels:
+        print("Manual corrections:", Counter(r["label"] for r in labels))
+    if meta.get("profile"):
+        print("Learned profile:", meta["profile"])
 
 
 if __name__ == "__main__":

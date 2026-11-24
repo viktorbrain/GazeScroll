@@ -96,6 +96,7 @@ class SessionResult:
     scrolls: list = field(default_factory=list)       # (t, kind, segment)
     max_truth_y_reading: float = 0.0
     ran_off_bottom: int = 0
+    manual: list = field(default_factory=list)        # (t, direction)
 
     def state_accuracy(self, settle=2.0) -> float:
         keep = np.ones(len(self.t), bool)
@@ -119,11 +120,28 @@ class SessionResult:
         return sum(1 for _, _, seg in self.scrolls if seg != State.READING.value)
 
 
+@dataclass
+class UserPolicy:
+    """How the virtual reader corrects the auto-scroll by hand.
+
+    The reader likes the current line between `min_y` and `max_y` of the viewport:
+    below `max_y` it scrolls down itself (auto-scroll too late), above `min_y`
+    right after an auto-scroll it pulls the text back (too early).
+    """
+    min_y: float = 0.40
+    max_y: float = 0.88
+    lines: int = 4
+    cooldown: float = 4.0
+
+
 def simulate_session(segments, fs=30.0, params: Params | None = None,
-                     noise: NoiseModel | None = None, seed=0, filt=True) -> SessionResult:
-    """segments: list of (State, seconds)."""
+                     noise: NoiseModel | None = None, seed=0, filt=True,
+                     adapter=None, user: UserPolicy | None = None) -> SessionResult:
+    """segments: list of (State, seconds). `adapter` (ScrollAdapter) learns from `user` corrections."""
     rng = np.random.default_rng(seed)
-    p = params or Params()
+    p = adapter.params if adapter is not None else (params or Params())
+    if adapter is not None:
+        adapter.new_session()
     nm = noise or NoiseModel()
     det = ReadingDetector(p)
     f = OneEuro(min_cutoff=1.0, beta=0.5)
@@ -140,6 +158,9 @@ def simulate_session(segments, fs=30.0, params: Params | None = None,
     lines_read = 0
     max_y = 0.0
     ran_off = 0
+    manual = []
+    last_manual = -1e9
+    last_auto = -1e9
 
     def fixations_reading():
         nonlocal line, lines_read
@@ -196,10 +217,34 @@ def simulate_session(segments, fs=30.0, params: Params | None = None,
                     elif e.kind == "scroll_half":
                         offset += 0.5
                         scrolls.append((t, e.kind, seg_state.value))
+                    if adapter is not None:
+                        if e.kind in ("scroll_line", "scroll_half"):
+                            adapter.on_auto_scroll(t)
+                            last_auto = t
+                        elif e.kind == "sweep":
+                            adapter.on_sweep(t)
+                # the virtual user corrects by hand
+                if (user is not None and seg_state == State.READING and tgt is not None
+                        and t - last_manual > user.cooldown):
+                    ly = tgt()[1]
+                    direction = 0
+                    if ly > user.max_y:
+                        direction = +1
+                    elif ly < user.min_y and t - last_auto < 1.0:
+                        direction = -1
+                    if direction:
+                        offset += direction * user.lines * lh
+                        det.manual_scroll(t)
+                        det.hist.clear()
+                        f.reset()
+                        last_manual = t
+                        manual.append((t, direction))
+                        if adapter is not None:
+                            adapter.on_manual_scroll(t, direction, det.state == State.READING)
                 T.append(t)
                 TS.append(seg_state.value)
                 PS.append(det.state.value)
                 t += dt
     # count frames, not samples, for ran_off
     return SessionResult(np.array(T), np.array(TS), np.array(PS), lines_read,
-                         scrolls, max_y, int(ran_off))
+                         scrolls, max_y, int(ran_off), manual)

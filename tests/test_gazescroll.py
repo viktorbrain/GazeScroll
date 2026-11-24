@@ -136,3 +136,46 @@ def test_manual_scroll_pauses_auto_scroll():
     det = ReadingDetector(Params())
     det.manual_scroll(0.0)
     assert det.manual_until == pytest.approx(3.0)
+
+
+# --- learning from manual corrections ------------------------------------------
+from gazescroll.adapt import BOUNDS, ScrollAdapter  # noqa: E402
+from gazescroll.synth import UserPolicy  # noqa: E402
+
+
+def test_adapter_rules_and_bounds():
+    ad = ScrollAdapter(Params(scroll_zone=0.65))
+    ad.on_auto_scroll(10.0)
+    assert ad.on_manual_scroll(11.0, -1) == "early"
+    assert ad.params.scroll_zone > 0.65
+    assert ad.on_manual_scroll(20.0, +1) == "late"
+    assert ad.on_manual_scroll(20.2, -1) is None            # no auto-scroll just before
+    for i in range(100):
+        ad.on_manual_scroll(100.0 + 10 * i, +1)
+    assert ad.params.scroll_zone == BOUNDS["scroll_zone"][0]
+
+
+def test_adapter_learns_reading_tempo():
+    ad = ScrollAdapter()
+    for i in range(20):
+        ad.on_sweep(2.5 * i)
+    assert abs(ad.line_time - 2.5) < 0.05
+    assert abs(ad.params.dwell_time - 2.0) < 0.05
+
+
+def test_profile_roundtrip():
+    ad = ScrollAdapter(Params(scroll_zone=0.7))
+    ad.on_sweep(0.0); ad.on_sweep(3.0)
+    ad2 = ScrollAdapter()
+    ad2.load(ad.profile())
+    assert ad2.params.scroll_zone == pytest.approx(0.7) and ad2.line_time == pytest.approx(3.0)
+
+
+@pytest.mark.parametrize("start", [0.85, 0.30])
+def test_closed_loop_corrections_die_out(start):
+    """A badly tuned start is fixed by the user's own corrections within a few sessions."""
+    ad = ScrollAdapter(Params(scroll_zone=start))
+    manual = [len(simulate_session([(State.READING, 120)], seed=s, adapter=ad,
+                                   user=UserPolicy()).manual) for s in range(6)]
+    assert sum(manual[-3:]) <= 1, manual
+    assert 0.45 <= ad.params.scroll_zone <= 0.80

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GazeScroll teszt</title>
+<style>
+/*
+VOICE: clinical lab instrument, calm, few hues
+IDEA: an e-reader page with a measuring overlay
+PICTURE: the reading page itself, gaze dot + state badge
+COLOUR and TYPE: paper white / ink, one orange pointer; Geist-like system sans
+LAYOUT: full-screen reader, thin control bar on top, calibration as full-screen overlay
+*/
+:root{color-scheme:light dark;--bg:light-dark(#f6f6f4,#121314);--ink:light-dark(#1b1c1e,#e8e8e6);--mute:light-dark(#6b6d70,#9a9c9f);--line:light-dark(#dcdcd8,#2a2c2e);--acc:#ff4f00;--ok:#1f9d55;--warn:#c98a00}
+*{box-sizing:border-box;min-width:0}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+button{font:inherit;min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#bar{position:fixed;inset:0 0 auto 0;z-index:5;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:color-mix(in srgb,var(--bg) 92%,transparent);border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+#badge{font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid var(--line);font-size:14px}
+#badge[data-s=OLVAS]{color:var(--ok);border-color:var(--ok)}
+#badge[data-s=PASZTAZ]{color:var(--warn);border-color:var(--warn)}
+#stats{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;margin-left:auto}
+#reader{position:absolute;inset:0;overflow-y:auto;padding:76px 0 60vh}
+#reader article{max-width:34em;margin:0 auto;padding:0 20px;font:19px/1.65 Georgia,"Times New Roman",serif}
+#reader h1{font:600 26px/1.2 system-ui,sans-serif;margin:0 0 16px}
+#dot{position:fixed;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:2px solid var(--acc);background:color-mix(in srgb,var(--acc) 25%,transparent);pointer-events:none;z-index:9;display:none}
+#overlay{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
+#overlay.hide{display:none}
+#overlay h2{font:600 28px/1.1 system-ui,sans-serif;margin:0 0 12px}
+#overlay p{max-width:30em;color:var(--mute);margin:0 0 16px}
+#overlay .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+#target{position:fixed;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:var(--acc);z-index:30;display:none;box-shadow:0 0 0 6px color-mix(in srgb,var(--acc) 25%,transparent)}
+#target::after{content:"";position:absolute;inset:11px;border-radius:50%;background:#fff}
+#cam{position:fixed;right:8px;bottom:8px;width:96px;border-radius:8px;z-index:6;opacity:.85;transform:scaleX(-1)}
+#msg{font-size:14px;color:var(--mute);min-height:1.5em}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="badge" data-s="-">–</span>
+  <button id="bDot" aria-pressed="false">Tekintetpont</button>
+  <button id="bAuto" aria-pressed="true">Auto-görgetés: be</button>
+  <button id="bRecal">Újrakalibrálás</button>
+  <button id="bLog">Napló mentése</button>
+  <span id="stats"></span>
+</div>
+
+<div id="reader"><article id="art"></article></div>
+<div id="dot"></div>
+<div id="target"></div>
+<video id="cam" playsinline muted></video>
+
+<div id="overlay">
+  <h2>GazeScroll teszt</h2>
+  <p>Tartsd a telefont kényelmes olvasási távolságban (kb. 30 cm), jó, szemből jövő fényben. A kalibráció 9 pont, két körben: minden pontra nézz rá, amíg el nem tűnik. A második körben kicsit mozdítsd el a telefont.</p>
+  <div class="row">
+    <button class="pri" id="bStart">Kamera + kalibráció</button>
+    <button id="bDemo">Demó kamera nélkül (érintés = tekintet)</button>
+  </div>
+  <p id="msg"></p>
+</div>
+
+<script type="module">
+{
+const $ = id => document.getElementById(id);
+const msg = t => { $('msg').textContent = t; };
+
+/* ---------------- sample text (original, generated for this test) ---------------- */
+const paras = [
+ 'A győri műhely hajnalban mindig ugyanúgy kezdődött: valaki felkapcsolta a neonokat, a többiek pedig egymás után megérkeztek a kávéjukkal. Aznap reggel azonban a szimulátor kijelzője már világított, pedig senki sem emlékezett rá, hogy bekapcsolva hagyta volna.',
+ 'Az első gondolat a szoftverfrissítés volt. A gépek éjszaka gyakran töltenek le valamit, és ilyenkor újraindulnak. A naplóban viszont nem volt frissítés, csak egy hosszú sor mérési adat, amelyeket valaki fél háromkor rögzített.',
+ 'A mérés egy szemmozgás-követő tesztből származott. A sofőr – vagy aki az ülésben ült – negyven percen át vezetett egy kitalált országúton, és a tekintete szabályos mintát rajzolt: tükör, műszerfal, út, tükör. Olyan rendezett volt, mintha valaki tankönyvből másolta volna.',
+ 'Délelőtt megnézték a kamerafelvételt is. Az ülés üres volt. A kormány viszont mozgott, finoman és pontosan, ahogy egy gyakorlott vezető tartja a sávot egy enyhe kanyarban. A pedálok is dolgoztak. Senki sem szólalt meg.',
+ 'A magyarázat végül prózaibb lett, mint amit vártak. Egy korábbi kísérlet visszajátszó módja maradt bekapcsolva, és a rendszer egy régi mérést futtatott le újra, valódi időben. A szemmozgás-adatok egy tavalyi résztvevőtől származtak.',
+ 'Mégis maradt valami furcsa érzés. A visszajátszás pontosan ugyanakkor indult el, amikor egy évvel korábban az eredeti mérés. Ugyanabban a percben, ugyanazzal a késéssel, mintha a gép emlékezne a saját naptárára.',
+ 'Ezután bevezették a szabályt, hogy este mindenki kézzel ellenőrzi a visszajátszó módot. A szabály egy hétig működött. Utána elfelejtették, ahogy az ilyen szabályokat szokás, és a műhely visszatért a megszokott ritmusához.',
+ 'Egy évvel később, hajnali fél háromkor, a kijelző újra felvillant.'
+];
+$('art').innerHTML = '<h1>Visszajátszás</h1>' + paras.concat(paras.slice(0,7)).map(p => `<p>${p}</p>`).join('');
+
+/* ---------------- features (port of gazescroll/features.py) ---------------- */
+const R_OUT=33,R_IN=133,L_IN=362,L_OUT=263,R_UP=159,R_LO=145,L_UP=386,L_LO=374,R_IR=468,L_IR=473,NOSE=1,CHIN=152,FORE=10;
+function eye(lm,o,i,u,l,ir){
+  const cx=(lm[o].x+lm[i].x)/2, cy=(lm[o].y+lm[i].y)/2;
+  let ax=lm[i].x-lm[o].x, ay=lm[i].y-lm[o].y; const w=Math.hypot(ax,ay)+1e-9; ax/=w; ay/=w;
+  const dx=lm[ir].x-cx, dy=lm[ir].y-cy;
+  return {u:(dx*ax+dy*ay)/w, v:(-dx*ay+dy*ax)/w, ear:Math.hypot(lm[u].x-lm[l].x,lm[u].y-lm[l].y)/w, cx, cy};
+}
+function extract(lm){
+  const r=eye(lm,R_OUT,R_IN,R_UP,R_LO,R_IR), l=eye(lm,L_IN,L_OUT,L_UP,L_LO,L_IR);
+  const ex=(r.cx+l.cx)/2, ey=(r.cy+l.cy)/2, iod=Math.hypot(l.cx-r.cx,l.cy-r.cy)+1e-9;
+  const roll=Math.atan2(l.cy-r.cy,l.cx-r.cx), yaw=(lm[NOSE].x-ex)/iod;
+  const fh=Math.hypot(lm[CHIN].x-lm[FORE].x,lm[CHIN].y-lm[FORE].y)+1e-9, pitch=(lm[NOSE].y-ey)/fh;
+  let sx=0,sy=0; for(const p of lm){sx+=p.x;sy+=p.y}
+  return [r.u,r.v,l.u,l.v,r.ear,l.ear,yaw,pitch,roll,sx/lm.length,sy/lm.length,fh,ex,ey];
+}
+const SD_FLOOR=[.02,.02,.02,.02,.02,.02,.05,.05,.05,.02,.02,.02,.02,.02];
+
+/* ---------------- ridge + RLS (port of gazescroll/model.py, linear basis) ---------------- */
+function solve(A,B){ // A n×n, B n×k  -> X
+  const n=A.length,k=B[0].length; const M=A.map((r,i)=>r.concat(B[i]));
+  for(let c=0;c<n;c++){ let p=c; for(let r=c+1;r<n;r++) if(Math.abs(M[r][c])>Math.abs(M[p][c])) p=r;
+    [M[c],M[p]]=[M[p],M[c]]; const d=M[c][c]||1e-12;
+    for(let r=0;r<n;r++) if(r!==c){ const f=M[r][c]/d; if(f) for(let j=c;j<n+k;j++) M[r][j]-=f*M[c][j]; } }
+  return M.map((r,i)=>r.slice(n).map(v=>v/M[i][i]));
+}
+function inv(A){ return solve(A, A.map((_,i)=>A.map((_,j)=>+(i===j)))); }
+const model={lam:.3,forget:.98,mu:null,sd:null,W:null,P:null,
+  basis(x){ return [1].concat(x.map((v,i)=>(v-this.mu[i])/this.sd[i])); },
+  fit(X,Y){ const n=X.length,d=X[0].length;
+    this.mu=Array.from({length:d},(_,j)=>X.reduce((s,r)=>s+r[j],0)/n);
+    this.sd=this.mu.map((m,j)=>Math.max(Math.sqrt(X.reduce((s,r)=>s+(r[j]-m)**2,0)/n),SD_FLOOR[j]));
+    const B=X.map(x=>this.basis(x)), q=B[0].length;
+    const A=Array.from({length:q},(_,i)=>Array.from({length:q},(_,j)=>B.reduce((s,b)=>s+b[i]*b[j],0)+(i===j&&i>0?this.lam:0)));
+    const BY=Array.from({length:q},(_,i)=>[0,1].map(k=>B.reduce((s,b,r)=>s+b[i]*Y[r][k],0)));
+    this.W=solve(A,BY); this.P=inv(A); },
+  predict(x){ const b=this.basis(x); return [0,1].map(k=>b.reduce((s,v,i)=>s+v*this.W[i][k],0)); },
+  update(x,y){ const b=this.basis(x),q=b.length,lam=this.forget;
+    const Pb=this.P.map(r=>r.reduce((s,v,j)=>s+v*b[j],0)), den=lam+b.reduce((s,v,i)=>s+v*Pb[i],0), k=Pb.map(v=>v/den);
+    const pred=this.predict(x);
+    [0,1].forEach(c=>{ if(!Number.isNaN(y[c])){ const e=y[c]-pred[c]; for(let i=0;i<q;i++) this.W[i][c]+=k[i]*e; } });
+    for(let i=0;i<q;i++) for(let j=0;j<q;j++) this.P[i][j]=(this.P[i][j]-k[i]*Pb[j])/lam; }
+};
+
+/* ---------------- One Euro ---------------- */
+function OneEuro(minC=1,beta=.5,dC=1){ let xp=null,dp=null,tp=null;
+  const a=(c,dt)=>1/(1+1/(2*Math.PI*c)/dt);
+  return (t,x)=>{ if(tp===null){xp=x.slice();dp=x.map(()=>0);tp=t;return x;}
+    const dt=Math.max(t-tp,1e-4), dx=x.map((v,i)=>(v-xp[i])/dt), ad=a(dC,dt);
+    const dh=dx.map((v,i)=>ad*v+(1-ad)*dp[i]);
+    const xh=x.map((v,i)=>{const al=a(minC+beta*Math.abs(dh[i]),dt); return al*v+(1-al)*xp[i];});
+    xp=xh;dp=dh;tp=t;return xh; }; }
+
+/* ---------------- reading detector (port of gazescroll/reading.py) ---------------- */
+const P={sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
+  enter:.50,stay:.30,sweepMem:4,awayAfter:.5,margin:.15,scrollZone:.65,dwellZone:.85,dwellTime:1.5,mute:.4,manual:3};
+const det={hist:[],state:'FELRENEZ',lastFace:-1e9,lastSweep:-1e9,lastScroll:-1e9,manualUntil:-1e9,dwell:null,lineH:.04,
+  resampled(t,span){ const pts=this.hist.filter(h=>t-h[0]<=span); if(pts.length<2) return [];
+    const out=[]; let j=0; for(let g=pts[0][0]; g<=pts.at(-1)[0]+1e-9; g+=P.step){
+      while(j<pts.length-2&&pts[j+1][0]<g) j++; const a=pts[j],b=pts[j+1]||a, f=b[0]>a[0]?(g-a[0])/(b[0]-a[0]):0;
+      out.push([g,a[1]+f*(b[1]-a[1]),a[2]+f*(b[2]-a[2])]); } return out; },
+  fwd(t){ const r=this.resampled(t,P.win); if(r.length<4) return null; let f=0,n=0;
+    for(let i=1;i<r.length;i++){ const dx=r[i][1]-r[i-1][1], dy=r[i][2]-r[i-1][2];
+      if(dx<-P.sweepMinDx*.75) continue; n++; if(dx>0&&dx<P.fwdMax&&Math.abs(dy)<1.5*this.lineH) f++; }
+    return n?f/n:null; },
+  sweep(t){ if(t-this.lastSweep<P.refractory) return null; const rec=this.hist.filter(h=>t-h[0]<=P.sweepWin); if(rec.length<2) return null;
+    let im=0; rec.forEach((h,i)=>{ if(h[1]>rec[im][1]) im=i; }); const now=rec.at(-1);
+    if(rec[im][1]-now[1]<P.sweepMinDx||now[1]>P.sweepEndX) return null;
+    if(now[2]-rec[im][2]< -1.5*this.lineH) return null;
+    const tp=rec[im][0], early=this.hist.filter(h=>h[0]>=tp-P.prelude-.3&&h[0]<=tp-P.prelude*.6).map(h=>h[1]).sort((a,b)=>a-b);
+    if(!early.length||rec[im][1]-early[early.length>>1]<.12) return null; return [now[1],now[2]]; },
+  classify(t,g){ if(!g) return t-this.lastFace>=P.awayAfter?'FELRENEZ':this.state;
+    const m=P.margin; if(g[0]<-m||g[0]>1+m||g[1]<-m||g[1]>1+m) return 'FELRENEZ';
+    const fr=this.fwd(t); if(fr===null) return this.state==='FELRENEZ'?'PASZTAZ':this.state;
+    const enter=P.enter-(t-this.lastSweep<=P.sweepMem?.05:0);
+    return fr>=(this.state==='OLVAS'?P.stay:enter)?'OLVAS':'PASZTAZ'; },
+  push(t,g){ const ev=[]; if(g){this.lastFace=t;this.hist.push([t,g[0],g[1]]);}
+    while(this.hist.length&&t-this.hist[0][0]>3.6) this.hist.shift();
+    let s=this.classify(t,g);
+    if(g&&t-this.lastScroll>P.mute){ const sw=this.sweep(t); if(sw){ this.lastSweep=t; ev.push(['sweep',sw]); s=this.classify(t,g);
+      if(s==='OLVAS'&&sw[1]>=P.scrollZone&&t>=this.manualUntil){ ev.push(['line']); this.lastScroll=t; this.hist=[]; } } }
+    if(g&&s==='OLVAS'&&g[1]>=P.dwellZone){ if(this.dwell===null) this.dwell=t; else if(t-this.dwell>=P.dwellTime&&t>=this.manualUntil){ ev.push(['half']); this.lastScroll=t; this.dwell=null; this.hist=[]; } }
+    else this.dwell=null;
+    this.state=s; return ev; } };
+
+/* ---------------- UI state ---------------- */
+const reader=$('reader'), art=$('art'), dot=$('dot'), tgt=$('target');
+let showDot=false, auto=true, mode='idle', landmarker=null, video=$('cam'), lastVideoT=-1;
+let filt=OneEuro(), log=[], nScroll=0, nSweep=0, lastFrameT=0, fps=0;
+const lineHpx=()=>parseFloat(getComputedStyle(art).lineHeight)||31;
+const col=()=>{ const r=art.getBoundingClientRect(); return {l:r.left+20,w:r.width-40}; };
+
+$('bDot').onclick=e=>{ showDot=!showDot; e.target.setAttribute('aria-pressed',showDot); dot.style.display=showDot?'block':'none'; };
+$('bAuto').onclick=e=>{ auto=!auto; e.target.setAttribute('aria-pressed',auto); e.target.textContent='Auto-görgetés: '+(auto?'be':'ki'); };
+$('bRecal').onclick=()=>{ if(mode!=='demo') startCalibration(); };
+$('bLog').onclick=()=>{ const blob=new Blob([JSON.stringify({meta:{ua:navigator.userAgent,w:innerWidth,h:innerHeight,lineH:lineHpx(),col:col(),model:{mu:model.mu,sd:model.sd,W:model.W}},frames:log})],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='gazescroll-log-'+Date.now()+'.json'; a.click(); };
+let userScrolling=false;
+reader.addEventListener('touchstart',()=>{ if(mode==='run'){ userScrolling=true; det.manualUntil=performance.now()/1000+P.manual; } },{passive:true});
+reader.addEventListener('touchend',()=>{userScrolling=false;},{passive:true});
+
+function doScroll(px){ nScroll++; reader.scrollBy({top:px,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'}); }
+
+function handleGaze(t,gpx,feat){
+  if(gpx){ dot.style.left=gpx[0]+'px'; dot.style.top=gpx[1]+'px'; }
+  const c=col(); det.lineH=lineHpx()/innerHeight;
+  const g=gpx?[(gpx[0]-c.l)/c.w, gpx[1]/innerHeight]:null;
+  const ev=det.push(t,g);
+  for(const [k,v] of ev){
+    if(k==='sweep'){ nSweep++;
+      if(feat&&mode==='run'){ model.update(feat,[c.l+8,NaN]); }   // line start x is known: free label
+    }
+    if(!auto) continue;
+    if(k==='line') doScroll(lineHpx());
+    if(k==='half') doScroll(innerHeight*.5);
+  }
+  $('badge').dataset.s=det.state; $('badge').textContent=det.state;
+  $('stats').textContent=`${fps.toFixed(0)} fps · sorvég ${nSweep} · görgetés ${nScroll}`;
+  log.push({t:+t.toFixed(3),g:gpx&&gpx.map(v=>+v.toFixed(1)),f:feat&&feat.map(v=>+v.toFixed(5)),s:det.state,y:reader.scrollTop,e:ev.map(e=>e[0])});
+  if(log.length>30*60*20) log.shift();
+}
+
+/* ---------------- camera + MediaPipe ---------------- */
+async function initCamera(){
+  msg('MediaPipe betöltése…');
+  const vision=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+  const files=await vision.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  landmarker=await vision.FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numFaces:1});
+  msg('Kamera indítása…');
+  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}},audio:false});
+  video.srcObject=stream; await video.play();
+}
+function grabFeatures(){
+  if(!landmarker||video.readyState<2||video.currentTime===lastVideoT) return undefined;
+  lastVideoT=video.currentTime;
+  const r=landmarker.detectForVideo(video,performance.now());
+  const lm=r.faceLandmarks&&r.faceLandmarks[0];
+  if(!lm||lm.length<478) return null;
+  const f=extract(lm); return (Math.min(f[4],f[5])<.18)?'blink':f;
+}
+
+/* ---------------- calibration ---------------- */
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function collect(x,y,ms){ tgt.style.left=x+'px'; tgt.style.top=y+'px'; tgt.style.display='block';
+  const t0=performance.now(), S=[]; while(performance.now()-t0<ms){ const f=grabFeatures(); if(Array.isArray(f)&&performance.now()-t0>300) S.push(f); await sleep(15); }
+  tgt.style.display='none'; await sleep(150);
+  if(S.length<3) return null;
+  const med=j=>{const a=S.map(s=>s[j]).sort((p,q)=>p-q);return a[a.length>>1];};
+  return S[0].map((_,j)=>med(j)); }
+async function startCalibration(){
+  mode='cal'; $('overlay').classList.add('hide'); $('bar').style.display='none';
+  const X=[],Y=[], mx=.1*innerWidth, my=.12*innerHeight;
+  const pts=[]; for(const fy of [0,.5,1]) for(const fx of [0,.5,1]) pts.push([mx+fx*(innerWidth-2*mx), my+fy*(innerHeight-2*my)]);
+  for(let pass=0;pass<2;pass++){ for(const p of pts.slice().sort(()=>Math.random()-.5)){ const f=await collect(p[0],p[1],1200); if(f){X.push(f);Y.push(p);} } }
+  if(X.length<8){ $('overlay').classList.remove('hide'); msg('Kevés jó minta – nem látom az arcod. Több fény, szemből.'); mode='idle'; return; }
+  model.fit(X,Y);
+  // validation on 4 new points
+  const vp=[[.3,.25],[.7,.4],[.35,.7],[.65,.85]].map(([a,b])=>[a*innerWidth,b*innerHeight]); let ex=0,ey=0,n=0;
+  for(const p of vp){ const f=await collect(p[0],p[1],1000); if(f){ const g=model.predict(f); ex+=Math.abs(g[0]-p[0]); ey+=Math.abs(g[1]-p[1]); n++; } }
+  const cm=v=>(v/n*2.54/160).toFixed(1); // ~160 CSS px per inch on phones (approx.)
+  $('bar').style.display='flex'; mode='run'; filt=OneEuro();
+  $('stats').textContent='';
+  alertBox(`Validációs hiba: x ≈ ${(ex/n).toFixed(0)} px (~${cm(ex)} cm), y ≈ ${(ey/n).toFixed(0)} px (~${cm(ey)} cm). Kezdd el olvasni a szöveget.`);
+}
+function alertBox(text){ const d=document.createElement('div'); d.textContent=text;
+  d.style.cssText='position:fixed;left:12px;right:12px;top:70px;z-index:8;padding:12px 14px;border-radius:10px;background:var(--ink);color:var(--bg);font-size:15px';
+  document.body.append(d); setTimeout(()=>d.remove(),6000); }
+
+/* ---------------- main loop ---------------- */
+function loop(){
+  const t=performance.now()/1000;
+  if(mode==='run'){
+    const f=grabFeatures();
+    if(f!==undefined){ fps=.9*fps+.1/Math.max(t-lastFrameT,1e-3); lastFrameT=t;
+      if(f===null) handleGaze(t,null,null);
+      else if(f!=='blink'){ const g=filt(t,model.predict(f)); handleGaze(t,g,f); } }
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+$('bStart').onclick=async()=>{ try{ await initCamera(); await startCalibration(); }
+  catch(e){ msg('Nem sikerült: '+e.message+' – HTTPS kell, és engedélyezni a kamerát.'); } };
+
+/* ---------------- demo: touch / mouse as gaze ---------------- */
+$('bDemo').onclick=()=>{ mode='demo'; $('overlay').classList.add('hide'); showDot=true; dot.style.display='block'; video.style.display='none';
+  alertBox('Demó: húzd az ujjad (vagy az egeret) soronként balról jobbra, mintha olvasnál. Sor végén ugorj vissza balra – az alsó harmadban ez görget.');
+  const mv=(x,y)=>handleGaze(performance.now()/1000,[x,y],null);
+  addEventListener('pointermove',e=>mv(e.clientX,e.clientY));
+  reader.style.touchAction='none';
+};
+}
+</script>
+</body>
+</html>

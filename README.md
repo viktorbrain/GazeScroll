@@ -59,4 +59,6 @@ A „Demó kamera nélkül” mód az érintést használja tekintetként – a 
 - **Önhangoló x (RollingNorm):** az utolsó 12 s nyers x-ének 10/90. percentilise lesz a sor eleje és vége, így a fejfordulás és a telefon elmozdulása nem viszi el.
 - **Tempótartás:** vízszintes módban, ha olvasol, de 1,3 sornyi ideig nem jött görgetés, magától görget egy sort (a tempó tanult).
 - **Biccentés:** gyors fejbiccentés (a dőlésszög ugrása > 0,08, és 0,8 s-on belül visszatér) a képernyő 1/3-ával görget. Kikapcsolható.
+- **Kamerakép:** kis, tükrözött szemkivágás jobb felül (koppintás: szem / arc / elrejtés). [v5]
+- **Ritmusfeltétel kikapcsolva** (a valós naplókon rontott).
 - **Ismert korlát:** vízszintes módban a véletlenszerű pásztázás néha sorvégnek látszik (szimulációban 11–20 téves sor/perc pásztázás közben).

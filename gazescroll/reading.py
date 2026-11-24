@@ -57,6 +57,7 @@ class Params:
     offscreen_away: bool = True
     lock_peak_min_x: float = 0.65    # x-only: sweep must start near the line end ...
     lock_end_x: float = 0.35         # ... and land near the line start
+    lock_rhythm: bool = False        # x-only: READING needs two sweeps ~1 line-time apart (hurt on real logs)
 
 
 @dataclass
@@ -217,7 +218,7 @@ class ReadingDetector:
         if p.line_lock:
             # no vertical signal: demand the reading rhythm (a recent return sweep)
             # and a clearly rightward drift, otherwise skimming looks like reading
-            if not self._rhythmic(t):
+            if p.lock_rhythm and not self._rhythmic(t):
                 return State.SKIMMING
             enter, stay = enter + 0.1, stay + 0.1
         if fr >= (stay if self.state == State.READING else enter):

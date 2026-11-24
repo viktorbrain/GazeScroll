@@ -36,7 +36,9 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #overlay .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
 #target{position:fixed;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:var(--acc);z-index:30;display:none;box-shadow:0 0 0 6px color-mix(in srgb,var(--acc) 25%,transparent)}
 #target::after{content:"";position:absolute;inset:11px;border-radius:50%;background:#fff}
-#cam{position:fixed;right:8px;bottom:8px;width:96px;border-radius:8px;z-index:6;opacity:.85;transform:scaleX(-1)}
+#cam{position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+#prev{position:fixed;right:8px;top:64px;width:112px;height:44px;border-radius:8px;z-index:7;border:1px solid var(--line);background:#000;display:none}
+#prev.face{height:84px}
 #eyeq{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:31;display:none;padding:6px 12px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:14px;font-variant-numeric:tabular-nums}
 #msg{font-size:14px;color:var(--mute);min-height:1.5em}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
@@ -59,6 +61,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 <div id="target"></div>
 <div id="eyeq" aria-live="polite"></div>
 <video id="cam" playsinline muted></video>
+<canvas id="prev" width="224" height="88" title="Koppintás: szem / arc / elrejtés"></canvas>
 
 <div id="overlay">
   <h2>GazeScroll teszt</h2>
@@ -148,7 +151,7 @@ function OneEuro(minC=1,beta=.5,dC=1){ let xp=null,dp=null,tp=null;
     xp=xh;dp=dh;tp=t;return xh; }; }
 
 /* ---------------- reading detector (port of gazescroll/reading.py) ---------------- */
-const P={lineLock:false,paceFactor:1.3,lineTime:2.5,offscreenAway:true,lockPeak:.65,lockEnd:.35,sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
+const P={lineLock:false,paceFactor:1.3,lineTime:2.5,offscreenAway:true,lockPeak:.65,lockEnd:.35,lockRhythm:false,sweepMinDx:.40,sweepWin:.30,sweepEndX:.40,prelude:.8,refractory:.6,step:.2,fwdMax:.30,win:2.5,
   enter:.50,stay:.30,sweepMem:4,awayAfter:.5,margin:.15,scrollZone:.65,dwellZone:.85,dwellTime:1.5,mute:.4,manual:3};
 const det={sweepTimes:[],readingSince:1e9,
   rhythmic(t){ const lt=P.lineTime, s=this.sweepTimes.filter(x=>t-x<=2.6*lt); if(s.length<2||t-s.at(-1)>1.6*lt) return false;
@@ -173,7 +176,7 @@ const det={sweepTimes:[],readingSince:1e9,
     const m=P.margin; if(P.offscreenAway&&(g[0]<-m||g[0]>1+m||g[1]<-m||g[1]>1+m)) return 'FELRENEZ';
     const fr=this.fwd(t); if(fr===null) return this.state==='FELRENEZ'?'PASZTAZ':this.state;
     let enter=P.enter-(t-this.lastSweep<=P.sweepMem?.05:0), stay=P.stay;
-    if(P.lineLock){ if(!this.rhythmic(t)) return 'PASZTAZ'; enter+=.1; stay+=.1; }
+    if(P.lineLock){ if(P.lockRhythm&&!this.rhythmic(t)) return 'PASZTAZ'; enter+=.1; stay+=.1; }
     return fr>=(this.state==='OLVAS'?stay:enter)?'OLVAS':'PASZTAZ'; },
   push(t,g){ const ev=[]; if(g){this.lastFace=t;this.hist.push([t,g[0],g[1]]);}
     while(this.hist.length&&t-this.hist[0][0]>3.6) this.hist.shift();
@@ -231,6 +234,7 @@ const blink={buf:[],lowSince:null,test(f){ const t=performance.now()/1000, ear=(
   if(b!==null&&ear<.55*b){ if(this.lowSince===null) this.lowSince=t; if(t-this.lowSince<=.4){ quality.blinks++; return true; } }
   else this.lowSince=null;
   this.buf.push(ear); if(this.buf.length>150) this.buf.shift(); return false; }};
+let lastLm=null, prevMode=store.get('gs-prev')??'eyes';
 const quality={blinks:0,ear:0,earBase:0,irisPx:0,facePx:0,lum:0,n:0}, qcv=document.createElement('canvas'); qcv.width=32; qcv.height=24; const qctx=qcv.getContext('2d',{willReadFrequently:true});
 let filt=OneEuro(), log=[], nScroll=0, nSweep=0, lastFrameT=0, fps=0;
 const lineHpx=()=>parseFloat(getComputedStyle(art).lineHeight)||31;
@@ -294,7 +298,8 @@ function grabFeatures(){
   lastVideoT=video.currentTime;
   const r=landmarker.detectForVideo(video,performance.now());
   const lm=r.faceLandmarks&&r.faceLandmarks[0];
-  if(!lm||lm.length<478) return null;
+  if(!lm||lm.length<478){ lastLm=null; return null; }
+  lastLm=lm;
   const vw=video.videoWidth, vh=video.videoHeight, px=(a,b)=>Math.hypot((lm[a].x-lm[b].x)*vw,(lm[a].y-lm[b].y)*vh);
   quality.irisPx=(px(469,471)+px(474,476))/2; quality.facePx=px(234,454);
   if(++quality.n%15===0){ try{ qctx.drawImage(video,0,0,32,24); const d=qctx.getImageData(0,0,32,24).data; let s=0; for(let i=0;i<d.length;i+=4) s+=.299*d[i]+.587*d[i+1]+.114*d[i+2]; quality.lum=s/(d.length/4); }catch(e){} }
@@ -386,6 +391,26 @@ function alertBox(text){ const d=document.createElement('div'); d.textContent=te
   d.style.cssText='position:fixed;left:12px;right:12px;top:70px;z-index:8;padding:12px 14px;border-radius:10px;background:var(--ink);color:var(--bg);font-size:15px';
   document.body.append(d); setTimeout(()=>d.remove(),6000); }
 
+/* ---------------- small cropped camera preview (top right) ---------------- */
+const prev=$('prev'), pctx=prev.getContext('2d');
+function placePrev(){ const b=$('bar').getBoundingClientRect(); prev.style.top=(b.height&&$('bar').style.display!=='none'?b.bottom+6:8)+'px'; }
+function setPrev(m){ prevMode=m; store.set('gs-prev',m); prev.classList.toggle('face',m==='face'); prev.height=m==='face'?168:88; }
+setPrev(prevMode);
+prev.onclick=()=>setPrev(prevMode==='eyes'?'face':prevMode==='face'?'off':'eyes');
+function drawPrev(){
+  if(!video.videoWidth||(mode!=='run'&&mode!=='cal')){ prev.style.display='none'; return; }
+  prev.style.display='block'; placePrev();
+  if(prevMode==='off'){ pctx.fillStyle='#000'; pctx.fillRect(0,0,prev.width,prev.height); pctx.fillStyle='#888'; pctx.font='22px system-ui'; pctx.fillText('kamera',70,prev.height/2+8); return; }
+  if(!lastLm) { pctx.fillStyle='#300'; pctx.fillRect(0,0,prev.width,prev.height); return; }
+  const vw=video.videoWidth, vh=video.videoHeight, ids=prevMode==='eyes'?[33,133,362,263,159,145,386,374]:[10,152,234,454];
+  let x0=1,x1=0,y0=1,y1=0; for(const i of ids){ const p=lastLm[i]; x0=Math.min(x0,p.x); x1=Math.max(x1,p.x); y0=Math.min(y0,p.y); y1=Math.max(y1,p.y); }
+  const w=(x1-x0)*vw, cx=(x0+x1)/2*vw, cy=(y0+y1)/2*vh, ar=prev.width/prev.height;
+  let sw=w*(prevMode==='eyes'?1.3:1.15), sh=sw/ar;
+  pctx.save(); pctx.translate(prev.width,0); pctx.scale(-1,1);   // mirror like a selfie
+  pctx.drawImage(video,cx-sw/2,cy-sh/2,sw,sh,0,0,prev.width,prev.height); pctx.restore();
+}
+addEventListener('resize',placePrev);
+
 /* ---------------- main loop ---------------- */
 function loop(){
   const t=performance.now()/1000;
@@ -400,6 +425,7 @@ function loop(){
           else { const c=col(); handleGaze(t,filt(t,[c.l+xn*c.w,innerHeight*.5]),f); } }
         else handleGaze(t,filt(t,model.predict(f)),f); } }
   }
+  drawPrev();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
